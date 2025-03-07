@@ -22,11 +22,21 @@ Font fontGeneral{};
 struct Sensor
 {
     Vector2 coor{};
+    Vector2 positionsMode{};
+    float weight{};
     float coorGap{};
     int value{};
 };
 
 std::vector<Sensor> sensors{};
+
+enum SensorMODE
+{
+    MODE_NORMAL,
+    MODE_SPORT
+};
+
+SensorMODE sensorMode = MODE_NORMAL;
 
 struct ImageSize
 {
@@ -324,14 +334,14 @@ int main()
 
     agv.loadImage(AGV_TEXTURE);
 
-    sensors.emplace_back(Sensor{ {}, -35 });
-    sensors.emplace_back(Sensor{ {}, -25 });
-    sensors.emplace_back(Sensor{ {}, -15 });
-    sensors.emplace_back(Sensor{ {}, -5 });
-    sensors.emplace_back(Sensor{ {}, +5 });
-    sensors.emplace_back(Sensor{ {}, +15 });
-    sensors.emplace_back(Sensor{ {}, +25 });
-    sensors.emplace_back(Sensor{ {}, +35 });
+    sensors.emplace_back(Sensor{ {}, { 55, 55}, -3, -35 });
+    sensors.emplace_back(Sensor{ {}, { 60, 55}, -2, -25 });
+    sensors.emplace_back(Sensor{ {}, { 63, 55}, -1, -15 });
+    sensors.emplace_back(Sensor{ {}, { 65, 55}, -0, -5 });
+    sensors.emplace_back(Sensor{ {}, { 65, 55}, +0, +5 });
+    sensors.emplace_back(Sensor{ {}, { 63, 55}, +1, +15 });
+    sensors.emplace_back(Sensor{ {}, { 60, 55}, +2, +25 });
+    sensors.emplace_back(Sensor{ {}, { 55, 55}, +3, +35 });
 
     int agvWidth = 90;
     int agvHeight = 90;
@@ -347,6 +357,8 @@ int main()
     const Color BACKGROUND = { 30,30,40,255 };
 
     std::vector<std::string> sectionsControl{ "MAP", "RUN", "SPEED", "PID" };
+
+    bool RUN_SIMULATION = { false };
 
     while (!WindowShouldClose())
     {
@@ -482,10 +494,6 @@ int main()
                     //size_t sections = 
                 }
 
-                // RUN BUTTON
-                Rectangle runButton{
-
-                };
             }
 
 
@@ -534,7 +542,112 @@ int main()
                 };
                 DrawRectangleRounded(FooterSection, 0.3F, 10, LIGHTGRAY);
 
+                // RUN BUTTON
+                Rectangle runButton{
+                    FooterSection.x + spacing,
+                    FooterSection.y + spacing,
+                    FooterSection.width * 0.1F,
+                    FooterSection.height - (spacing * 2)
+                };
 
+                Color runButtonColor = BACKGROUND;
+                std::string runButtonText{ "RUN" };
+                if (CheckCollisionPointRec(GetMousePosition(), runButton))
+                {
+                    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+                    {
+                        RUN_SIMULATION = !RUN_SIMULATION;
+                    }
+                }
+
+                if (RUN_SIMULATION)
+                {
+                    runButtonColor = RED;
+                    runButtonText = "STOP";
+                }
+
+                DrawRectangleRounded(runButton, 0.25F, 10, runButtonColor);
+                DrawTextCustom(runButton, runButtonText, CENTER, 0.9F, 1, WHITE);
+
+
+                // 8 BIT SENSOR DISPLAY
+                float sensorDisplayW = 0.4F * FooterSection.width;
+                Rectangle sensorDisplay{
+                    FooterSection.x + ((FooterSection.width - sensorDisplayW) / 2),
+                    FooterSection.y,
+                    sensorDisplayW,
+                    FooterSection.height
+                };
+
+                {
+                    for (size_t i = 0; i < sensors.size(); i++)
+                    {
+                        Rectangle sensorDisplayBit{
+                            sensorDisplay.x + (i * sensorDisplay.width / sensors.size()),
+                            sensorDisplay.y,
+                            sensorDisplay.width / sensors.size(),
+                            sensorDisplay.height
+                        };
+
+                        float pad = spacing;
+                        sensorDisplayBit = {
+                            sensorDisplayBit.x + pad,
+                            sensorDisplayBit.y + pad,
+                            sensorDisplayBit.width - (pad * 2),
+                            sensorDisplayBit.height - (pad * 2)
+                        };
+
+                        DrawRectangleRounded(sensorDisplayBit, 0.25, 10, BACKGROUND);
+                        std::string text = { std::to_string(sensors.at(i).value) };
+                        DrawTextCustom(sensorDisplayBit, text, CENTER, 1, 1, WHITE);
+                    }
+                }
+
+
+                if (RUN_SIMULATION)
+                {
+                    float Speed = 150.0F;
+
+                    float sumWeight{};
+                    float positiveSensors{};
+
+                    for (auto& sensor : sensors)
+                    {
+                        if (sensor.value == 1)
+                        {
+                            sumWeight += sensor.weight;
+                            positiveSensors++;
+                        }
+                    }
+
+
+                    float error{ sumWeight / positiveSensors };
+
+                    // PID
+                    float dt = GetFrameTime();
+
+                    float Kp = { 19 };
+                    float Ki = { 0.1F };
+                    float Kd = { 1.0F };
+
+                    float integral = error * dt;
+                    static float prevError = 0;
+                    float derivative = (error - prevError) / dt;
+                    prevError = error;
+
+                    float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+
+                    if (positiveSensors == 0)
+                    {
+                        RUN_SIMULATION = false;
+                        prevError = 0;
+                    }
+                    if (RUN_SIMULATION)
+                    {
+                        agv.velocityLeft = Speed - correction;
+                        agv.velocityRight = Speed + correction;
+                    }
+                }
 
             }
         }
@@ -567,13 +680,29 @@ int main()
             //DrawCircleV(front, 5, WHITE);
         }
 
-        Vector2 sensorArea{};
-        float valueSensorArea = 60;
-        sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
-        sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
+        //Vector2 sensorArea{};
+        //float valueSensorArea = 60;
+        //sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
+        //sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
 
-        for (Sensor sensor : sensors)
+        for (Sensor& sensor : sensors)
         {
+            Vector2 sensorArea{};
+            float valueSensorArea = 60;
+
+            if (sensorMode == MODE_NORMAL)
+            {
+                valueSensorArea = sensor.positionsMode.y;
+            }
+            else
+            {
+                valueSensorArea = sensor.positionsMode.x;
+            }
+
+
+            sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
+            sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
+
             float sensorOffset = sensor.coorGap;
             sensor.coor.x = (sensorArea.x) + (cos((agv.angle + 90) * DEG2RAD) * sensorOffset);
             sensor.coor.y = (sensorArea.y) + (sin((agv.angle + 90) * DEG2RAD) * sensorOffset);
@@ -588,7 +717,7 @@ int main()
             //    DrawCircleV(sensor.coor, 3, circleColor);
             //}
 
-            Color lineMagnetic = BLACK;
+            Color lineMagnetic = { 18,18,18,255 };
             //Color sensorRead = {};
 
             if (screenImage.height != 0)
@@ -608,9 +737,9 @@ int main()
                         sampleY >= 0 && sampleY < screenImage.height)
                     {
                         Color sensorRead = GetImageColor(screenImage, sampleX, sampleY);
-                        if (sensorRead.r == lineMagnetic.r &&
-                            sensorRead.g == lineMagnetic.g &&
-                            sensorRead.b == lineMagnetic.b &&
+                        if (sensorRead.r <= lineMagnetic.r &&
+                            sensorRead.g <= lineMagnetic.g &&
+                            sensorRead.b <= lineMagnetic.b &&
                             sensorRead.a == lineMagnetic.a)
                         {
                             detected = true;
@@ -623,6 +752,10 @@ int main()
                 {
                     circleColor = WHITE;
                     DrawCircleV(sensor.coor, 4, circleColor);
+                    sensor.value = 1;
+                }
+                else {
+                    sensor.value = 0;
                 }
             }
 
