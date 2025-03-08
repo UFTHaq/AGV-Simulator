@@ -12,10 +12,13 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <format>
 #include "AGV_Simulator.h"
 
 const std::string AGV_TEXTURE { "Resources/Design/AGV.png" };
 const std::string FONT_LOC{ "Resources/Fonts/Sofia_Sans_Condensed/static/SofiaSansCondensed-Medium.ttf" };
+const std::string MAP_A_LOC{ "Resources/Design/Track1.png" };
+const std::string MAP_B_LOC{ "Resources/Design/Track2.png" };
 
 Font fontGeneral{};
 
@@ -153,6 +156,11 @@ public:
     float x, y, angle;
     float length;
     float velocityLeft, velocityRight;
+    float speed{180.0F};
+
+    float Kp{ 20.0F };
+    float Ki{ 0.1F };
+    float Kd{ 1.0F };
 
     Image image{};
     Texture2D texture{};
@@ -178,6 +186,12 @@ public:
     {
         image = LoadImage(file.c_str());
         texture = LoadTexture(file.c_str());
+        SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+    }
+
+    float getSpeed() const
+    {
+        return speed;
     }
 };
 
@@ -321,8 +335,239 @@ void DrawTextCustom(Rectangle& panel, std::string text, int align, float size, f
     DrawTextEx(font, text.c_str(), text_coor, font_size, font_space, color);
 }
 
+struct ButtonMap {
+    std::string text{};
+    bool isChoosen{};
+    bool isHover{};
+    std::string mapLoc{};
+    const Color colorPressed{ 79, 100, 166, 255 };
+    const Color colorNormal{ 180, 180, 180, 255 };
+
+    ButtonMap
+    (
+        const std::string text, bool isChoosen, const std::string mapLoc
+    ) :
+        text(text), isChoosen(isChoosen), mapLoc(mapLoc) 
+    {
+
+    };
+
+    void chooseThisButton()
+    {
+        isChoosen = true;
+    }
+
+    void resetChoosen()
+    {
+        isChoosen = false;
+    }
+
+    std::string getDisplay() const
+    {
+        return text;
+    }
+
+    Color getColorButton() const {
+        if (isChoosen || isHover) return colorPressed;
+        else return colorNormal;
+    }
+
+    Color getColorText() const {
+        return isChoosen ? WHITE : BLACK;
+    }
+};
+
+std::string simulationMAP{};
+
+struct ButtonMode {
+    std::string text{};
+    bool isChoosen{};
+    SensorMODE sensorMode{};
+    bool isHover{};
+    const Color colorPressed{ 79, 100, 166, 255 };
+    const Color colorNormal{ 180, 180, 180, 255 };
+
+    ButtonMode
+    (
+        const std::string text, bool isChoosen, SensorMODE sensorMode
+    ) :
+        text(text), isChoosen(isChoosen), sensorMode(sensorMode) {};
+
+    void chooseThisButton()
+    {
+        isChoosen = true;
+    }
+
+    void resetChoosen()
+    {
+        isChoosen = false;
+    }
+
+    std::string getDisplay() const
+    {
+        return text;
+    }
+
+    SensorMODE getMode() const
+    {
+        return sensorMode;
+    }
+
+    Color getColorButton() const {
+        if (isChoosen || isHover) return colorPressed;
+        else return colorNormal;
+    }
+
+    Color getColorText() const {
+        return isChoosen ? WHITE : BLACK;
+    }
+};
+
+struct SliderInput {
+    Rectangle area{};
+    float value{};
+    float minValue{};
+    float maxValue{};
+    bool dragging{};
+
+    Rectangle minValRect{};
+    Rectangle sliderBarRect{};
+    Rectangle maxValRect{};
+
+    SliderInput(Rectangle area, float initialValue, float minValue, float maxValue, bool dragging) :
+        area(area), value(initialValue), minValue(minValue), maxValue(maxValue), dragging(dragging)
+    {
+        float smallRectWidthCoef = 0.235F;
+        float spaceRect = 0.04F;
+
+        minValRect = {
+            area.x,
+            area.y,
+            area.width * smallRectWidthCoef,
+            area.height
+        };
+
+        sliderBarRect = {
+            minValRect.x + minValRect.width + (area.width * spaceRect),
+            area.y,
+            area.width * (1.0F - (2 * (smallRectWidthCoef + spaceRect))),
+            area.height
+        };
+
+        maxValRect = {
+            sliderBarRect.x + sliderBarRect.width + (area.width * spaceRect),
+            area.y,
+            area.width * smallRectWidthCoef,
+            area.height
+        };
+
+        float pad = 2;
+        float topPadding = 2.5;
+
+        minValRect = {
+            minValRect.x + (pad * 2),
+            minValRect.y + (pad * topPadding),
+            minValRect.width - (pad * 2 * 2),
+            minValRect.height - (pad * topPadding * 2),
+        };
+
+        sliderBarRect = {
+            sliderBarRect.x + (pad * 2),
+            sliderBarRect.y + (pad * topPadding),
+            sliderBarRect.width - (pad * 2 * 2),
+            sliderBarRect.height - (pad * topPadding * 2),
+        };
+
+        maxValRect = {
+            maxValRect.x + (pad * 2),
+            maxValRect.y + (pad * topPadding),
+            maxValRect.width - (pad * 2 * 2),
+            maxValRect.height - (pad * topPadding * 2),
+        };
+    };
 
 
+
+    void Draw() {
+        float fontSize = 0.8F;
+        std::string valueStr{};
+
+        //DrawRectangleRoundedLines(minValRect, 0.2F, 10, 0.5F, WHITE);
+        //DrawRectangleRounded(minValRect, 0.2F, 10, BLACK);
+        valueStr = std::format("{:.2f}", minValue);
+        DrawTextCustom(minValRect, valueStr, 1, fontSize, 0, BLACK);
+
+        //DrawRectangleRoundedLines(maxValRect, 0.2F, 10, 0.5F, WHITE);
+        //DrawRectangleRounded(maxValRect, 0.2F, 10, BLACK);
+        valueStr = std::format("{:.0f}", maxValue);
+        DrawTextCustom(maxValRect, valueStr, 1, fontSize, 0, BLACK);
+
+        float handleX = sliderBarRect.x + ((value - minValue) / (maxValue - minValue)) * sliderBarRect.width;
+        float handleW = 12;
+        Rectangle handleRect{
+            handleX - (handleW * 0.5F),
+            sliderBarRect.y,
+            handleW,
+            sliderBarRect.height
+        };
+        const Color color{ 79, 100, 166, 255 };
+
+        Rectangle SliderBarRectWithPad{
+            sliderBarRect.x - (handleW * 0.5F),
+            sliderBarRect.y,
+            sliderBarRect.width + (handleW * 1),
+            sliderBarRect.height
+        };
+        //DrawRectangleRoundedLines(SliderBarRectWithPad, 0.0F, 10, 0.5F, WHITE);
+        DrawRectangleRounded(SliderBarRectWithPad, 0.2F, 10, { 25,32,45,255 });
+        DrawRectangleRounded(handleRect, 0.2F, 10, color);
+
+        valueStr = std::format("{:.2f}", value);
+        DrawTextCustom(SliderBarRectWithPad, valueStr, 1, fontSize, 0, WHITE);
+    }
+
+
+    void Update() {
+        Vector2 mousePos = GetMousePosition();
+
+        if (CheckCollisionPointRec(mousePos, sliderBarRect) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            dragging = true;
+        }
+
+        if (dragging) {
+            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+                dragging = false;
+            }
+            else {
+                float normalizedValue = (mousePos.x - sliderBarRect.x) / sliderBarRect.width;
+                value = minValue + normalizedValue * (maxValue - minValue);
+
+            }
+        }
+
+        if (CheckCollisionPointRec(mousePos, sliderBarRect)) {
+            float wheelDelta = GetMouseWheelMove();
+
+            int totalSteps = 20;
+            float factor = (maxValue - minValue) / totalSteps;
+
+            value += wheelDelta * factor;
+        }
+
+        if (value < minValue) value = minValue;
+        if (value > maxValue) value = maxValue;
+    }
+
+    void Run() {
+        Update();
+        Draw();
+    }
+
+    float GetValue() const {
+        return value;
+    }
+
+};
 
 int main()
 {
@@ -346,7 +591,8 @@ int main()
     int agvWidth = 90;
     int agvHeight = 90;
 
-    fontGeneral = LoadFontEx(FONT_LOC.c_str(), 60, 0, 0);
+    fontGeneral = LoadFontEx(FONT_LOC.c_str(), 80, 0, 0);
+    SetTextureFilter(fontGeneral.texture, TEXTURE_FILTER_BILINEAR);
 
     int takeScreenShot{ 0 };
     Image screenImage{};
@@ -356,7 +602,11 @@ int main()
 
     const Color BACKGROUND = { 30,30,40,255 };
 
-    std::vector<std::string> sectionsControl{ "MAP", "RUN", "SPEED", "PID" };
+    std::vector<std::string> parameterControls{ "MAP", "MODE" };
+    std::vector<ButtonMap> argumentMap{ {"A", 0, MAP_A_LOC}, {"B", 0, MAP_B_LOC} };
+    std::vector<ButtonMode> argumentMode{ {"NORMAL", 1, MODE_NORMAL}, {"SPORT", 0, MODE_SPORT} };
+
+    std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd" };
 
     bool RUN_SIMULATION = { false };
 
@@ -431,19 +681,22 @@ int main()
                             trackImage = LoadImage(c_file_path);
 
                             if (trackTexture.height != 0) UnloadTexture(trackTexture);
-                            //trackTexture = LoadTextureFromImage(trackImage);
                             trackTexture = LoadTexture(c_file_path);
+
+                            SetTextureFilter(trackTexture, TEXTURE_FILTER_BILINEAR);
 
                             inputFlexibleSize = CalculateFlexibleImage();
                             flexible_panel_input = FlexibleRectangle(PanelInputImage, inputFlexibleSize.w, inputFlexibleSize.h);
                         
-                            agv.x = 175;
-                            agv.y = 350;
+                            resetAGVPosition();
+
+                            for (auto& map : argumentMap)
+                            {
+                                map.resetChoosen();
+                            }
                         }
 
                         takeScreenShot = 2;
-
-                        // agar ketika run, langsung bisa simulasi.
 
                         UnloadDroppedFiles(dropped_file);
                     }
@@ -484,14 +737,328 @@ int main()
                     PanelInputImage.x,
                     AGV_Base.y + AGV_Base.height + spacing,
                     PanelInputImage.width,
-                    MainLeftSection.height - PanelInputImage.height - AGV_Base.height - spacing - spacing
+                    MainLeftSection.height * 0.155F + spacing
                 };
                 DrawRectangleRounded(SetupSection, 0.05F, 10, LIGHTGRAY);
 
-                static bool RUN = { false };
+                // PANEL PID & Speed
+                Rectangle PIDSection{
+                    PanelInputImage.x,
+                    SetupSection.y + SetupSection.height + spacing,
+                    PanelInputImage.width,
+                    MainLeftSection.height - PanelInputImage.height - AGV_Base.height - SetupSection.height - (spacing * 3)
+                };
+                DrawRectangleRounded(PIDSection, 0.05F, 10, LIGHTGRAY);
+
 
                 {
-                    //size_t sections = 
+                    // PANEL CONTROLS
+
+                    float pad = 5;
+                    SetupSection = {
+                        SetupSection.x,
+                        SetupSection.y + (pad * 1),
+                        SetupSection.width,
+                        SetupSection.height - (pad * 2)
+                    };
+
+                    Rectangle PanelParameter{
+                        SetupSection.x,
+                        SetupSection.y,
+                        SetupSection.width * 0.30F + spacing,
+                        SetupSection.height
+                    };
+
+                    Rectangle PanelArgument{
+                        PanelParameter.x + PanelParameter.width + spacing,
+                        PanelParameter.y,
+                        (SetupSection.width - PanelParameter.width - spacing) * 0.975F,
+                        PanelParameter.height
+                    };
+
+                    size_t parameterCounts = parameterControls.size();
+
+                    for (size_t i = 0; i < parameterCounts; i++)
+                    {
+                        {
+                            Rectangle parameter{
+                                PanelParameter.x,
+                                PanelParameter.y + (i * PanelParameter.height / parameterCounts),
+                                PanelParameter.width,
+                                PanelParameter.height / parameterCounts
+                            };
+
+                            std::string text = parameterControls.at(i);
+                            DrawTextCustom(parameter, text, LEFT, 0.6F, 1.0F, fontGeneral, BLACK);
+                        }
+
+                        {
+                            Rectangle argument{
+                                PanelArgument.x,
+                                PanelArgument.y + (i * PanelArgument.height / parameterCounts),
+                                PanelArgument.width,
+                                PanelArgument.height / parameterCounts
+                            };
+
+                            float buttonPad = 5;
+                            float buttonPadFactor = 1.25F;
+
+                            if (parameterControls.at(i) == "MAP")
+                            {
+                                size_t buttonCounts = argumentMap.size();
+                                for (size_t j = 0; j < buttonCounts; j++)
+                                {
+                                    auto& theButton = argumentMap.at(j);
+
+                                    Rectangle buttonBase{
+                                        argument.x + (j * argument.width / buttonCounts),
+                                        argument.y,
+                                        argument.width / buttonCounts,
+                                        argument.height
+                                    };
+
+                                    Rectangle ButtonRect{
+                                        buttonBase.x + (buttonPad * 1),
+                                        buttonBase.y + (buttonPad * buttonPadFactor),
+                                        buttonBase.width - (buttonPad * 2),
+                                        buttonBase.height - (buttonPad * 2 * buttonPadFactor)
+                                    };
+
+                                    if (CheckCollisionPointRec(GetMousePosition(), ButtonRect)) {
+                                        theButton.isHover = true;
+
+                                        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                                            for (auto& button : argumentMap) {
+                                                button.resetChoosen();
+                                            }
+                                            theButton.chooseThisButton();
+
+                                            // RELOAD THE MAP
+                                            if (trackImage.height != 0) UnloadImage(trackImage);
+                                            trackImage = LoadImage(theButton.mapLoc.c_str());
+
+                                            if (trackTexture.height != 0) UnloadTexture(trackTexture);
+                                            trackTexture = LoadTexture(theButton.mapLoc.c_str());
+
+                                            SetTextureFilter(trackTexture, TEXTURE_FILTER_BILINEAR);
+
+                                            inputFlexibleSize = CalculateFlexibleImage();
+                                            flexible_panel_input = FlexibleRectangle(PanelInputImage, inputFlexibleSize.w, inputFlexibleSize.h);
+
+                                            resetAGVPosition();
+
+                                            takeScreenShot = 2;
+                                        }
+                                    }
+                                    else {
+                                        theButton.isHover = false;
+                                    }
+
+                                    if (theButton.isChoosen)
+                                    {
+                                        simulationMAP = theButton.getDisplay();
+                                    }
+
+                                    DrawRectangleRounded(ButtonRect, 0.2F, 10, theButton.getColorButton());
+                                    std::string text = theButton.getDisplay();
+                                    DrawTextCustom(ButtonRect, text, CENTER, 0.75F, 1.0F, fontGeneral, theButton.getColorText());
+
+                                }
+                            }
+
+                            if (parameterControls.at(i) == "MODE")
+                            {
+                                size_t buttonCounts = argumentMode.size();
+                                for (size_t j = 0; j < buttonCounts; j++)
+                                {
+                                    auto& theButton = argumentMode.at(j);
+
+                                    Rectangle buttonBase{
+                                        argument.x + (j * argument.width / buttonCounts),
+                                        argument.y,
+                                        argument.width / buttonCounts,
+                                        argument.height
+                                    };
+
+                                    Rectangle ButtonRect{
+                                        buttonBase.x + (buttonPad * 1),
+                                        buttonBase.y + (buttonPad * buttonPadFactor),
+                                        buttonBase.width - (buttonPad * 2),
+                                        buttonBase.height - (buttonPad * 2 * buttonPadFactor)
+                                    };
+
+                                    if (CheckCollisionPointRec(GetMousePosition(), ButtonRect)) {
+                                        theButton.isHover = true;
+
+                                        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                                            for (auto& button : argumentMode) {
+                                                button.resetChoosen();
+                                            }
+                                            theButton.chooseThisButton();
+                                        }
+                                    }
+                                    else {
+                                        theButton.isHover = false;
+                                    }
+
+                                    if (theButton.isChoosen)
+                                    {
+                                        sensorMode = theButton.sensorMode;
+                                    }
+
+                                    DrawRectangleRounded(ButtonRect, 0.2F, 10, theButton.getColorButton());
+                                    std::string text = theButton.getDisplay();
+                                    DrawTextCustom(ButtonRect, text, CENTER, 0.55F, 1.0F, fontGeneral, theButton.getColorText());
+
+                                }
+                            }
+                        }
+                    }
+                }
+
+                {
+                    // PANEL SPEED AND PID
+
+                    float pad = 5;
+                    PIDSection = {
+                        PIDSection.x,
+                        PIDSection.y + (pad * 1),
+                        PIDSection.width,
+                        PIDSection.height - (pad * 2)
+                    };
+
+                    Rectangle PanelParameter{
+                        PIDSection.x,
+                        PIDSection.y,
+                        PIDSection.width * 0.30F + spacing,
+                        PIDSection.height
+                    };
+
+                    Rectangle PanelArgument{
+                        PanelParameter.x + PanelParameter.width + spacing,
+                        PanelParameter.y,
+                        (PIDSection.width - PanelParameter.width - spacing) * 0.975F,
+                        PanelParameter.height
+                    };
+
+                    size_t parameterCounts = parameterPID.size();
+
+                    for (size_t i = 0; i < parameterCounts; i++)
+                    {
+                        {
+                            Rectangle parameter{
+                                PanelParameter.x,
+                                PanelParameter.y + (i * PanelParameter.height / parameterCounts),
+                                PanelParameter.width,
+                                PanelParameter.height / parameterCounts
+                            };
+
+                            std::string text = parameterPID.at(i);
+                            DrawTextCustom(parameter, text, LEFT, 0.6F, 1.0F, fontGeneral, BLACK);
+                        }
+
+                        {
+                            Rectangle argument{
+                                PanelArgument.x,
+                                PanelArgument.y + (i * PanelArgument.height / parameterCounts),
+                                PanelArgument.width,
+                                PanelArgument.height / parameterCounts
+                            };
+
+                            float pad = 10.0F;
+
+                            argument = {
+                                argument.x,
+                                argument.y + (pad * 1),
+                                argument.width - pad,
+                                argument.height - (pad * 2)
+                            };
+
+                            if (parameterPID.at(i) == "SPEED") {
+
+                                float minValue = 50.0F;
+                                float maxValue = 1000.0F;
+
+                                static SliderInput SliderSpeed{ argument, agv.getSpeed(), minValue, maxValue, false };
+                                SliderSpeed.Run();
+
+                                if (CheckCollisionPointRec(GetMousePosition(), argument))
+                                {
+                                    float newVal = (float)SliderSpeed.GetValue();
+                                    static float oldVal = newVal;
+
+                                    if (newVal != oldVal)
+                                    {
+                                        agv.speed = newVal;
+                                        oldVal = newVal;
+                                    }
+
+                                }
+                            }
+                            else if (parameterPID.at(i) == "Kp")
+                            {
+                                float minValue = 2.0F;
+                                float maxValue = 150.0F;
+
+                                static SliderInput SliderKp{ argument, agv.Kp, minValue, maxValue, false };
+                                SliderKp.Run();
+
+                                if (CheckCollisionPointRec(GetMousePosition(), argument))
+                                {
+                                    float newVal = (float)SliderKp.GetValue();
+                                    static float oldVal = newVal;
+
+                                    if (newVal != oldVal)
+                                    {
+                                        agv.Kp = newVal;
+                                        oldVal = newVal;
+                                    }
+                                }
+                            }
+                            else if (parameterPID.at(i) == "Ki")
+                            {
+                                float minValue = 0.01F;
+                                float maxValue = 10.0F;
+
+                                static SliderInput SliderKi{ argument, agv.Ki, minValue, maxValue, false };
+                                SliderKi.Run();
+
+                                if (CheckCollisionPointRec(GetMousePosition(), argument))
+                                {
+                                    float newVal = (float)SliderKi.GetValue();
+                                    static float oldVal = newVal;
+
+                                    if (newVal != oldVal)
+                                    {
+                                        agv.Ki = newVal;
+                                        oldVal = newVal;
+                                    }
+                                }
+                            }
+                            else if (parameterPID.at(i) == "Kd")
+                            {
+                                float minValue = 0.01F;
+                                float maxValue = 10.0F;
+
+                                static SliderInput SliderKd{ argument, agv.Kd, minValue, maxValue, false };
+                                SliderKd.Run();
+
+                                if (CheckCollisionPointRec(GetMousePosition(), argument))
+                                {
+                                    float newVal = (float)SliderKd.GetValue();
+                                    static float oldVal = newVal;
+
+                                    if (newVal != oldVal)
+                                    {
+                                        agv.Kd = newVal;
+                                        oldVal = newVal;
+                                    }
+                                }
+                            }
+                        }
+
+                    }
+
                 }
 
             }
@@ -505,8 +1072,6 @@ int main()
                     (float)(int)PanelBase.width - MainLeftSection.width - spacing,
                     (float)(int)MainRightSection.height * 0.9F + spacing,
                 };
-                //DrawRectangleLinesEx(PanelOutputImage, 0.5F, WHITE);
-                //DrawRectangleRounded(PanelOutputImage, 0.025F, 10, p->ColorPanel);
                 DrawRectangleRounded(PanelOutputImage, 0.025F, 10, LIGHTGRAY);
 
                 outputFlexibleSize = CalculateFlexibleImage();
@@ -606,7 +1171,7 @@ int main()
 
                 if (RUN_SIMULATION)
                 {
-                    float Speed = 150.0F;
+                    float Speed = agv.getSpeed();
 
                     float sumWeight{};
                     float positiveSensors{};
@@ -626,9 +1191,9 @@ int main()
                     // PID
                     float dt = GetFrameTime();
 
-                    float Kp = { 19 };
-                    float Ki = { 0.1F };
-                    float Kd = { 1.0F };
+                    float Kp = agv.Kp;
+                    float Ki = agv.Ki;
+                    float Kd = agv.Kd;
 
                     float integral = error * dt;
                     static float prevError = 0;
@@ -652,16 +1217,6 @@ int main()
             }
         }
 
-        //// TITLE
-        //{
-        //    Vector2 textCoor{};
-        //    float fontSize = 60.0F;
-        //    float fontSpace = 1.0F;
-        //    Color color = WHITE;
-
-        //    DrawTextEx(fontGeneral, "AGV SIMULATOR", textCoor, fontSize, fontSpace, color);
-        //}
-
 
 
         Rectangle agvRect = { agv.x, agv.y, agvWidth, agvHeight };
@@ -680,10 +1235,6 @@ int main()
             //DrawCircleV(front, 5, WHITE);
         }
 
-        //Vector2 sensorArea{};
-        //float valueSensorArea = 60;
-        //sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
-        //sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
 
         for (Sensor& sensor : sensors)
         {
@@ -711,14 +1262,7 @@ int main()
             Color circleColor = BLACK;
             DrawCircleLinesV(sensor.coor, 4, circleColor);
 
-            //if (CheckCollisionCircleRec(sensor.coor, 4, line))
-            //{
-            //    circleColor = WHITE;
-            //    DrawCircleV(sensor.coor, 3, circleColor);
-            //}
-
-            Color lineMagnetic = { 18,18,18,255 };
-            //Color sensorRead = {};
+            Color lineMagnetic = { 25,25,25,255 };
 
             if (screenImage.height != 0)
             {
@@ -777,6 +1321,12 @@ int main()
     }
 
     return 0;
+}
+
+void resetAGVPosition()
+{
+    agv.x = 175;
+    agv.y = 350;
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
