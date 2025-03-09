@@ -10,6 +10,7 @@
 
 #include "raylib.h"
 #include <cmath>
+#include <iostream>
 #include <string>
 #include <vector>
 #include <format>
@@ -26,20 +27,42 @@ struct Sensor
 {
     Vector2 coor{};
     Vector2 positionsMode{};
-    float weight{};
+    int weight{};
     float coorGap{};
     int value{};
 };
 
 std::vector<Sensor> sensors{};
 
-enum SensorMODE
+enum class SensorMODE
 {
     MODE_NORMAL,
     MODE_SPORT
 };
 
-SensorMODE sensorMode = MODE_NORMAL;
+SensorMODE sensorMode = SensorMODE::MODE_NORMAL;
+
+enum class AGVEvent
+{
+    NOTHING,
+    CROSS,
+    FORK,
+    MERGE,
+    CHECK_POINT,
+    STOP,
+};
+
+AGVEvent agvEvent = AGVEvent::NOTHING;
+
+enum class AGVMovement
+{
+    NORMAL_PID,
+    STRAIGHT,
+    LEFT,
+    RIGHT
+};
+
+AGVMovement agvMovement = AGVMovement::NORMAL_PID;
 
 struct ImageSize
 {
@@ -575,7 +598,7 @@ int main()
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     InitWindow(1600, 900, "AGV Simulator");
-    SetTargetFPS(60);
+    SetTargetFPS(75);
 
     agv.loadImage(AGV_TEXTURE);
 
@@ -604,7 +627,7 @@ int main()
 
     std::vector<std::string> parameterControls{ "MAP", "MODE" };
     std::vector<ButtonMap> argumentMap{ {"A", 0, MAP_A_LOC}, {"B", 0, MAP_B_LOC} };
-    std::vector<ButtonMode> argumentMode{ {"NORMAL", 1, MODE_NORMAL}, {"SPORT", 0, MODE_SPORT} };
+    std::vector<ButtonMode> argumentMode{ {"NORMAL", 1, SensorMODE::MODE_NORMAL}, {"SPORT", 0, SensorMODE::MODE_SPORT} };
 
     std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd" };
 
@@ -1168,25 +1191,234 @@ int main()
                     }
                 }
 
+                /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
                 if (RUN_SIMULATION)
                 {
                     float Speed = agv.getSpeed();
 
-                    float sumWeight{};
-                    float positiveSensors{};
+                    int sumWeight{};
+                    int positiveSensors{};
 
-                    for (auto& sensor : sensors)
+                    //==============
+                    bool currentCPCheckState{ false };
+                    static bool prevCPCheckState{};
+                    static int CPCounter{};
+                    static int ResetCounter{};
+
+                    bool currentForkMergeMarkerState{ false };
+                    static bool prevForkMergeMarkerState{};
+                    static int MarkerCounter{};
+
+                    static bool DoneTurning{};
+                    static bool DoneStraight{};
+
+                    //==============
+
                     {
-                        if (sensor.value == 1)
+                        int sensorRead{};
+                        for (auto& sensor : sensors)
                         {
-                            sumWeight += sensor.weight;
-                            positiveSensors++;
+
+                            if (sensor.value == 1)
+                            {
+                                sensorRead++;
+                            }
+                        }
+
+                        const int CP_Confirm_Frames = 5;
+                        static int CPFrameCounter{};
+
+                        if (sensorRead == 8)
+                        {
+                            CPFrameCounter++;
+                        }
+                        else
+                        {
+                            CPFrameCounter = 0;
+                        }
+
+                        if (CPFrameCounter >= CP_Confirm_Frames)
+                        {
+                            currentCPCheckState = true;
+                            agvEvent = AGVEvent::CHECK_POINT;
+                        }
+                        else
+                        {
+                            currentCPCheckState = false;
+                            agvEvent = AGVEvent::NOTHING;
+                        }
+
+                        if (prevCPCheckState == false && currentCPCheckState == true)
+                        {
+                            CPCounter++;
+                            MarkerCounter = 0;
+
+                            if (CPCounter > 3)
+                            {
+                                CPCounter = 1;
+                                ResetCounter++;
+                                std::cout << "Reset Counter: " << ResetCounter << std::endl;
+
+                                if (ResetCounter == 2)
+                                {
+                                    agvEvent = AGVEvent::STOP;
+                                    RUN_SIMULATION = false;
+                                    if (agvEvent == AGVEvent::STOP) std::cout << "Stop" << std::endl;
+                                }
+                            }
+                            std::cout << "CP Counter: " << CPCounter << std::endl;
+                        }
+
+
+                        //std::cout << "CP Counter: " << CPCounter << std::endl;
+                    }
+
+                    prevCPCheckState = currentCPCheckState;
+
+                    //==============
+
+
+                    if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                    {
+                        currentForkMergeMarkerState = true;
+                    }
+                    else
+                    {
+                        currentForkMergeMarkerState = false;
+                    }
+
+                    if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true) && (agvEvent != AGVEvent::FORK))
+                    {
+                        MarkerCounter++;
+                        DoneTurning = false;
+                        std::cout << "Marker Counter: " << MarkerCounter << std::endl;
+                        agvEvent = AGVEvent::FORK;
+                    }
+
+                    prevForkMergeMarkerState = currentForkMergeMarkerState;
+
+                    
+                    if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
+                    //if (agvEvent == AGVEvent::NOTHING) std::cout << "Nothing" << std::endl;
+
+                    //==============
+
+
+                    if (agvEvent == AGVEvent::FORK) 
+                    {
+                        if (CPCounter == 1)
+                        {
+                            if ((MarkerCounter == 1 || MarkerCounter == 2))
+                            {
+                                agvMovement = AGVMovement::RIGHT;
+                            }
+
+                            std::cout << "Fork & CP1 & RIGHT" << std::endl;
+                        }
+                        else if (CPCounter == 2)
+                        {
+                            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                            else if (MarkerCounter == 2) agvMovement = AGVMovement::RIGHT;
+                            else if (MarkerCounter == 3) agvMovement = AGVMovement::RIGHT;
+                            else if (MarkerCounter == 4) agvMovement = AGVMovement::STRAIGHT;
+                            std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
+                        }
+                        else if (CPCounter == 3)
+                        {
+                            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                            else
+                                agvMovement == AGVMovement::STRAIGHT;
+                            std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
                         }
                     }
 
+                    //==============
 
-                    float error{ sumWeight / positiveSensors };
+
+                    switch (agvMovement)
+                    {
+                    case AGVMovement::NORMAL_PID:
+
+                        for (size_t i = 0; i < sensors.size(); i++)
+                        {
+                            if (sensors.at(i).value == 1)
+                            {
+                                sumWeight += sensors.at(i).weight;
+                                positiveSensors++;
+                            }
+                        }
+
+                        break;
+                    case AGVMovement::STRAIGHT:
+
+                        for (size_t i = 0; i < sensors.size(); i++)
+                        {
+                            if ((i == 3) || (i == 4))
+                            {
+                                sumWeight += sensors.at(i).weight;
+                                positiveSensors++;
+                            }
+
+                            static float noDetection = GetTime();
+
+                            if (GetTime() - noDetection > 2.0F)
+                            {
+                                agvMovement = AGVMovement::NORMAL_PID;
+
+                                DoneStraight = false;
+
+                                agvEvent = AGVEvent::NOTHING;
+                            }
+                        }
+
+                        break;
+                    case AGVMovement::LEFT:
+
+                        for (size_t i = 0; i < sensors.size(); i++)
+                        {
+
+                        }
+
+                        break;
+                    case AGVMovement::RIGHT:
+
+                        for (size_t i = 0; i < sensors.size(); i++)
+                        {
+                            if ((i >= 3) && sensors.at(i).value == 1)
+                            {
+                                sumWeight += sensors.at(i).weight;
+                                positiveSensors++;
+                            }
+
+                            if (sensors.at(7).value == 1)
+                            {
+                                DoneTurning = true;
+                            }
+
+                            if (DoneTurning == true &&
+                                (sensors.at(7).value == 0 && sensors.at(0).value == 0))
+                            {
+                                agvMovement = AGVMovement::NORMAL_PID;
+
+                                DoneTurning = false;
+
+                                agvEvent = AGVEvent::NOTHING;
+                            }
+                        }
+
+                        break;
+                    default:
+                        break;
+                    }
+
+
+
+                    bool currentTurning{};
+                    static bool prevTurning{};
+
+                    float error{ (float)sumWeight / positiveSensors };
+
 
                     // PID
                     float dt = GetFrameTime();
@@ -1212,7 +1444,10 @@ int main()
                         agv.velocityLeft = Speed - correction;
                         agv.velocityRight = Speed + correction;
                     }
+
+
                 }
+                /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             }
         }
@@ -1241,7 +1476,7 @@ int main()
             Vector2 sensorArea{};
             float valueSensorArea = 60;
 
-            if (sensorMode == MODE_NORMAL)
+            if (sensorMode == SensorMODE::MODE_NORMAL)
             {
                 valueSensorArea = sensor.positionsMode.y;
             }
@@ -1295,6 +1530,12 @@ int main()
                 if (detected)
                 {
                     circleColor = WHITE;
+
+                    if (agvEvent == AGVEvent::CHECK_POINT)
+                    {
+                        circleColor = GREEN;
+                    }
+
                     DrawCircleV(sensor.coor, 4, circleColor);
                     sensor.value = 1;
                 }
@@ -1321,6 +1562,30 @@ int main()
     }
 
     return 0;
+}
+
+void AGV_PID(float Speed, float correction)
+{
+    agv.velocityLeft = Speed - correction;
+    agv.velocityRight = Speed + correction;
+}
+
+void AGVGoStraight(float Speed)
+{
+    agv.velocityLeft = Speed;
+    agv.velocityRight = Speed;
+}
+
+void AGVGoRight(float Speed)
+{
+    agv.velocityLeft = Speed;
+    agv.velocityRight = Speed * 0.5F;
+}
+
+void AGVGoLeft(float Speed)
+{
+    agv.velocityLeft = Speed * 0.5F;
+    agv.velocityRight = Speed;
 }
 
 void resetAGVPosition()
