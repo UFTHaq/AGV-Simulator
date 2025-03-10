@@ -525,13 +525,9 @@ struct SliderInput {
         float fontSize = 0.8F;
         std::string valueStr{};
 
-        //DrawRectangleRoundedLines(minValRect, 0.2F, 10, 0.5F, WHITE);
-        //DrawRectangleRounded(minValRect, 0.2F, 10, BLACK);
         valueStr = std::format("{:.2f}", minValue);
         DrawTextCustom(minValRect, valueStr, 1, fontSize, 0, BLACK);
 
-        //DrawRectangleRoundedLines(maxValRect, 0.2F, 10, 0.5F, WHITE);
-        //DrawRectangleRounded(maxValRect, 0.2F, 10, BLACK);
         valueStr = std::format("{:.0f}", maxValue);
         DrawTextCustom(maxValRect, valueStr, 1, fontSize, 0, BLACK);
 
@@ -551,7 +547,6 @@ struct SliderInput {
             sliderBarRect.width + (handleW * 1),
             sliderBarRect.height
         };
-        //DrawRectangleRoundedLines(SliderBarRectWithPad, 0.0F, 10, 0.5F, WHITE);
         DrawRectangleRounded(SliderBarRectWithPad, 0.2F, 10, { 25,32,45,255 });
         DrawRectangleRounded(handleRect, 0.2F, 10, color);
 
@@ -1203,25 +1198,26 @@ int main()
 
                 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+                bool currentCPCheckState{ false };
+                static bool prevCPCheckState{};
+                static int CPCounter{};
+                static int ResetCounter{};
+
+                bool currentForkMergeMarkerState{ false };
+                static bool prevForkMergeMarkerState{};
+                static int MarkerCounter{};
+
+                static bool DoneTurning{};
+                static bool DoneStraight{};
+
+                //==============
+
                 if (RUN_SIMULATION)
                 {
                     float Speed = agv.getSpeed();
 
                     int sumWeight{};
                     int positiveSensors{};
-
-                    //==============
-                    bool currentCPCheckState{ false };
-                    static bool prevCPCheckState{};
-                    static int CPCounter{};
-                    static int ResetCounter{};
-
-                    bool currentForkMergeMarkerState{ false };
-                    static bool prevForkMergeMarkerState{};
-                    static int MarkerCounter{};
-
-                    static bool DoneTurning{};
-                    static bool DoneStraight{};
 
                     //==============
 
@@ -1236,7 +1232,7 @@ int main()
                             }
                         }
 
-                        const int CP_Confirm_Frames = 5;
+                        const int CP_Confirm_Frames = 7;
                         static int CPFrameCounter{};
 
                         if (sensorRead == 8)
@@ -1288,25 +1284,33 @@ int main()
 
                     //==============
 
-
-                    if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                    //for (size_t i = 0; i < sensors.size(); i++)
                     {
-                        currentForkMergeMarkerState = true;
-                    }
-                    else
-                    {
-                        currentForkMergeMarkerState = false;
-                    }
+                        //if (((i <= 3) && sensors.at(i).value == 1) && ((i >= 5) && sensors.at(i).value == 0))
 
-                    if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true) && (agvEvent != AGVEvent::FORK))
-                    {
-                        MarkerCounter++;
-                        DoneTurning = false;
-                        //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
-                        agvEvent = AGVEvent::FORK;
-                    }
+                        //if ((sensors.at(0).value == 1) && (sensors.at(7).value == 0) && (sensors.at(3).value == 1))
+                        //{
+                        //    currentForkMergeMarkerState = true;
+                        //}
+                        if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                        {
+                            currentForkMergeMarkerState = true;
+                        }
+                        else
+                        {
+                            currentForkMergeMarkerState = false;
+                        }
 
-                    prevForkMergeMarkerState = currentForkMergeMarkerState;
+                        if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true) && (agvEvent != AGVEvent::FORK))
+                        {
+                            MarkerCounter++;
+                            DoneTurning = false;
+                            //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
+                            agvEvent = AGVEvent::FORK;
+                        }
+
+                        prevForkMergeMarkerState = currentForkMergeMarkerState;
+                    }
 
 
                     //if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
@@ -1387,6 +1391,8 @@ int main()
                         }
 
                         agvEvent = AGVEvent::NOTHING;
+
+                        loadUnloadTimer = 0.0;
                     }
 
                     if ((agvConveyor == AGVConveyor::LOADING) || agvConveyor == AGVConveyor::UNLOADING)
@@ -1422,7 +1428,7 @@ int main()
 
                             static float noDetection = GetTime();
 
-                            if (GetTime() - noDetection > 1.2F)
+                            if (GetTime() - noDetection > 1.7F)
                             {
                                 agvMovement = AGVMovement::NORMAL_PID;
 
@@ -1509,6 +1515,29 @@ int main()
                 }
                 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+                if (IsKeyPressed(KEY_R))
+                {
+                    agvEvent = AGVEvent::NOTHING;
+
+                    agvMovement = AGVMovement::NORMAL_PID;
+
+                    agvConveyor = AGVConveyor::EMPTY;
+
+                    RUN_SIMULATION = false;
+
+                    resetAGVPosition();
+
+                    prevCPCheckState = false;
+                    CPCounter = false;
+                    ResetCounter = false;
+
+                    prevForkMergeMarkerState = false;
+                    MarkerCounter = false;
+
+                    DoneTurning = false;
+                    DoneStraight = false;
+                }
+
             }
         }
 
@@ -1539,6 +1568,7 @@ int main()
             if (agvConveyor == AGVConveyor::LOADED || agvConveyor == AGVConveyor::UNLOADING)
             {
                 DrawCircleV(front, 15, BACKGROUND);
+                DrawCircleLinesV(front, 16, WHITE);
             }
         }
 
@@ -1634,7 +1664,6 @@ int main()
                     sensor.value = 0;
                 }
             }
-
         }
 
 
@@ -1649,7 +1678,6 @@ int main()
 
             takeScreenShot--;
         }
-
     }
 
     return 0;
@@ -1681,8 +1709,13 @@ void AGVGoLeft(float Speed)
 
 void resetAGVPosition()
 {
+    agv.velocityLeft = 0;
+    agv.velocityRight = 0;
+
     agv.x = 175;
     agv.y = 350;
+
+    agv.angle = 0;
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
