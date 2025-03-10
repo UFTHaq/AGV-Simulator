@@ -16,7 +16,7 @@
 #include <format>
 #include "AGV_Simulator.h"
 
-const std::string AGV_TEXTURE { "Resources/Design/AGV.png" };
+const std::string AGV_TEXTURE{ "Resources/Design/AGV.png" };
 const std::string FONT_LOC{ "Resources/Fonts/Sofia_Sans_Condensed/static/SofiaSansCondensed-Medium.ttf" };
 const std::string MAP_A_LOC{ "Resources/Design/Track1.png" };
 const std::string MAP_B_LOC{ "Resources/Design/Track2.png" };
@@ -49,6 +49,7 @@ enum class AGVEvent
     FORK,
     MERGE,
     CHECK_POINT,
+    WAIT,
     STOP,
 };
 
@@ -63,6 +64,16 @@ enum class AGVMovement
 };
 
 AGVMovement agvMovement = AGVMovement::NORMAL_PID;
+
+enum class AGVConveyor
+{
+    EMPTY,
+    LOADING,
+    LOADED,
+    UNLOADING,
+};
+
+AGVConveyor agvConveyor = AGVConveyor::EMPTY;
 
 struct ImageSize
 {
@@ -179,9 +190,9 @@ public:
     float x, y, angle;
     float length;
     float velocityLeft, velocityRight;
-    float speed{180.0F};
+    float speed{ 225.0F };
 
-    float Kp{ 20.0F };
+    float Kp{ 40.0F };
     float Ki{ 0.1F };
     float Kd{ 1.0F };
 
@@ -267,7 +278,6 @@ void GrabAndRotate(float agvWidth, float agvHeight)
         color = BLUE;
         DrawRectanglePro(agvRect, agvOrigin, agv.angle, color);
     }
-
 
     static bool draggingAGV{};
     if (CheckCollisionPointRec(GetMousePosition(), grabRect))
@@ -370,7 +380,7 @@ struct ButtonMap {
     (
         const std::string text, bool isChoosen, const std::string mapLoc
     ) :
-        text(text), isChoosen(isChoosen), mapLoc(mapLoc) 
+        text(text), isChoosen(isChoosen), mapLoc(mapLoc)
     {
 
     };
@@ -598,7 +608,7 @@ int main()
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     InitWindow(1600, 900, "AGV Simulator");
-    SetTargetFPS(75);
+    SetTargetFPS(90);
 
     agv.loadImage(AGV_TEXTURE);
 
@@ -638,7 +648,7 @@ int main()
         float dt = GetFrameTime();
         HandleInput(dt);
         agv.Update(dt);
-        
+
 
         Rectangle line = { 400,200,300,20 };
         DrawRectangleRec(line, BLACK);
@@ -710,7 +720,7 @@ int main()
 
                             inputFlexibleSize = CalculateFlexibleImage();
                             flexible_panel_input = FlexibleRectangle(PanelInputImage, inputFlexibleSize.w, inputFlexibleSize.h);
-                        
+
                             resetAGVPosition();
 
                             for (auto& map : argumentMap)
@@ -724,7 +734,7 @@ int main()
                         UnloadDroppedFiles(dropped_file);
                     }
 
-                    if (trackTexture.height != 0) 
+                    if (trackTexture.height != 0)
                     {
                         // Draw input
                         {
@@ -1258,16 +1268,16 @@ int main()
                             {
                                 CPCounter = 1;
                                 ResetCounter++;
-                                std::cout << "Reset Counter: " << ResetCounter << std::endl;
+                                //std::cout << "Reset Counter: " << ResetCounter << std::endl;
 
                                 if (ResetCounter == 2)
                                 {
                                     agvEvent = AGVEvent::STOP;
                                     RUN_SIMULATION = false;
-                                    if (agvEvent == AGVEvent::STOP) std::cout << "Stop" << std::endl;
+                                    //if (agvEvent == AGVEvent::STOP) std::cout << "Stop" << std::endl;
                                 }
                             }
-                            std::cout << "CP Counter: " << CPCounter << std::endl;
+                            //std::cout << "CP Counter: " << CPCounter << std::endl;
                         }
 
 
@@ -1292,20 +1302,20 @@ int main()
                     {
                         MarkerCounter++;
                         DoneTurning = false;
-                        std::cout << "Marker Counter: " << MarkerCounter << std::endl;
+                        //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
                         agvEvent = AGVEvent::FORK;
                     }
 
                     prevForkMergeMarkerState = currentForkMergeMarkerState;
 
-                    
-                    if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
+
+                    //if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
                     //if (agvEvent == AGVEvent::NOTHING) std::cout << "Nothing" << std::endl;
 
                     //==============
 
 
-                    if (agvEvent == AGVEvent::FORK) 
+                    if (agvEvent == AGVEvent::FORK)
                     {
                         if (CPCounter == 1)
                         {
@@ -1314,7 +1324,7 @@ int main()
                                 agvMovement = AGVMovement::RIGHT;
                             }
 
-                            std::cout << "Fork & CP1 & RIGHT" << std::endl;
+                            //std::cout << "Fork & CP1 & RIGHT" << std::endl;
                         }
                         else if (CPCounter == 2)
                         {
@@ -1322,20 +1332,70 @@ int main()
                             else if (MarkerCounter == 2) agvMovement = AGVMovement::RIGHT;
                             else if (MarkerCounter == 3) agvMovement = AGVMovement::RIGHT;
                             else if (MarkerCounter == 4) agvMovement = AGVMovement::STRAIGHT;
-                            std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
+                            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
                         }
                         else if (CPCounter == 3)
                         {
                             if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
                             else
-                                agvMovement == AGVMovement::STRAIGHT;
-                            std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
+                                agvMovement = AGVMovement::STRAIGHT;
+                            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
                         }
                     }
 
                     //==============
 
+                    static double loadUnloadTimer{};
+                    double timeNow{ GetTime() };
 
+
+                    for (size_t i = 0; i < sensors.size(); i++)
+                    {
+                        if ((i <= 3) && sensors.at(i).value == -1)
+                        {
+                            if (agvConveyor == AGVConveyor::LOADED)
+                            {
+                                agvConveyor = AGVConveyor::UNLOADING;
+
+                                loadUnloadTimer = GetTime();
+
+                                agvEvent = AGVEvent::WAIT;
+                            }
+                        }
+                        else if ((i >= 4) && sensors.at(i).value == -1)
+                        {
+                            if (agvConveyor == AGVConveyor::EMPTY)
+                            {
+                                agvConveyor = AGVConveyor::LOADING;
+
+                                loadUnloadTimer = GetTime();
+
+                                agvEvent = AGVEvent::WAIT;
+                            }
+                        }
+                    }
+
+                    if (timeNow - loadUnloadTimer > 3.0)
+                    {
+                        if (agvConveyor == AGVConveyor::LOADING)
+                        {
+                            agvConveyor = AGVConveyor::LOADED;
+                        }
+                        else if (agvConveyor == AGVConveyor::UNLOADING)
+                        {
+                            agvConveyor = AGVConveyor::EMPTY;
+                        }
+
+                        agvEvent = AGVEvent::NOTHING;
+                    }
+
+                    if ((agvConveyor == AGVConveyor::LOADING) || agvConveyor == AGVConveyor::UNLOADING)
+                    {
+                        Speed = 0;
+                    }
+
+                    //==============
+                    
                     switch (agvMovement)
                     {
                     case AGVMovement::NORMAL_PID:
@@ -1362,7 +1422,7 @@ int main()
 
                             static float noDetection = GetTime();
 
-                            if (GetTime() - noDetection > 2.0F)
+                            if (GetTime() - noDetection > 1.2F)
                             {
                                 agvMovement = AGVMovement::NORMAL_PID;
 
@@ -1470,6 +1530,18 @@ int main()
             //DrawCircleV(front, 5, WHITE);
         }
 
+        {
+            Vector2 front{};
+            float value = 0;
+            front.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * value);
+            front.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * value);
+
+            if (agvConveyor == AGVConveyor::LOADED || agvConveyor == AGVConveyor::UNLOADING)
+            {
+                DrawCircleV(front, 15, BACKGROUND);
+            }
+        }
+
 
         for (Sensor& sensor : sensors)
         {
@@ -1498,10 +1570,12 @@ int main()
             DrawCircleLinesV(sensor.coor, 4, circleColor);
 
             Color lineMagnetic = { 25,25,25,255 };
+            Color RedMagnetic = { 255, 0, 0, 255 };
 
             if (screenImage.height != 0)
             {
-                bool detected = false;
+                bool detectedNORTH = false;
+                bool detectedSOUTH = false;
 
                 int numSamples = 8;
                 float radius = 3;
@@ -1516,18 +1590,28 @@ int main()
                         sampleY >= 0 && sampleY < screenImage.height)
                     {
                         Color sensorRead = GetImageColor(screenImage, sampleX, sampleY);
+
                         if (sensorRead.r <= lineMagnetic.r &&
                             sensorRead.g <= lineMagnetic.g &&
                             sensorRead.b <= lineMagnetic.b &&
                             sensorRead.a == lineMagnetic.a)
                         {
-                            detected = true;
+                            detectedNORTH = true;
                             break;  // Stop checking if touch black
+                        }
+
+                        if (sensorRead.r == RedMagnetic.r &&
+                            sensorRead.g == RedMagnetic.g &&
+                            sensorRead.b == RedMagnetic.b &&
+                            sensorRead.a == RedMagnetic.a)
+                        {
+                            detectedSOUTH = true;
+                            break;
                         }
                     }
                 }
 
-                if (detected)
+                if (detectedNORTH)
                 {
                     circleColor = WHITE;
 
@@ -1538,6 +1622,13 @@ int main()
 
                     DrawCircleV(sensor.coor, 4, circleColor);
                     sensor.value = 1;
+                }
+                else if (detectedSOUTH)
+                {
+                    circleColor = BLACK;
+
+                    DrawCircleV(sensor.coor, 4, circleColor);
+                    sensor.value = -1;
                 }
                 else {
                     sensor.value = 0;
