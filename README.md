@@ -12,9 +12,9 @@
 # AGV-Simulator
 Simple agv line follower simulation with control of (PID, Speed, Sensor off Timing).
 
-<div align="center">
-<!--   <img src="https://github.com/user-attachments/assets/1e35a476-31ae-4c60-b80d-7cd21cff0aa4" width=180/> -->
-</div>
+
+## AGV Simulator Demo App
+https://github.com/user-attachments/assets/9d5a3408-c186-4ea0-9d93-532013c80d04
 
 ### Features:
 - Drag&Drop Track, as long the track is black, it can be detected, atleast in range of {RGBA : {0,0,0,255} to {25,25,25,255}}.
@@ -43,6 +43,6 @@ Simple agv line follower simulation with control of (PID, Speed, Sensor off Timi
 - Raylib : [https://www.raylib.com](https://www.raylib.com/)
 
 ### Download:
-- Windows-x64 : [AGV-Simulator-Beta-v0.1.0-win64.zip](this will be link download)
+- Windows-x64 : [AGV-Simulator-v0.1.0-Beta-win64.zip](https://github.com/UFTHaq/AGV-Simulator/releases/download/v0.1.0-beta/AGV-Simulator-Beta-v0.1.0-win64.zip)
 
 
