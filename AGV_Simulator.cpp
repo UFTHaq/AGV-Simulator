@@ -190,11 +190,13 @@ public:
     float x, y, angle;
     float length;
     float velocityLeft, velocityRight;
-    float speed{ 225.0F };
+    float speed{ 320.0F };
 
-    float Kp{ 40.0F };
+    float Kp{ 62.0F };
     float Ki{ 0.1F };
     float Kd{ 1.0F };
+
+    float timeTurn{ 0.81F };
 
     Image image{};
     Texture2D texture{};
@@ -522,7 +524,7 @@ struct SliderInput {
 
 
     void Draw() {
-        float fontSize = 0.8F;
+        float fontSize = 0.9F;
         std::string valueStr{};
 
         valueStr = std::format("{:.2f}", minValue);
@@ -626,7 +628,7 @@ int main()
     Image screenImage{};
 
     agv.x = 175;
-    agv.y = 350;
+    agv.y = 343;
 
     const Color BACKGROUND = { 30,30,40,255 };
 
@@ -634,7 +636,8 @@ int main()
     std::vector<ButtonMap> argumentMap{ {"A", 0, MAP_A_LOC}, {"B", 0, MAP_B_LOC} };
     std::vector<ButtonMode> argumentMode{ {"NORMAL", 1, SensorMODE::MODE_NORMAL}, {"SPORT", 0, SensorMODE::MODE_SPORT} };
 
-    std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd" };
+    //std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd" };
+    std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd", "Time" };
 
     bool RUN_SIMULATION = { false };
 
@@ -756,7 +759,7 @@ int main()
                     PanelInputImage.x,
                     PanelInputImage.y + PanelInputImage.height + spacing,
                     PanelInputImage.width,
-                    MainLeftSection.height * 0.15F + spacing
+                    MainLeftSection.height * 0.135F + spacing
                 };
                 DrawRectangleRounded(AGV_Base, 0.1F, 10, LIGHTGRAY);
 
@@ -765,7 +768,7 @@ int main()
                     PanelInputImage.x,
                     AGV_Base.y + AGV_Base.height + spacing,
                     PanelInputImage.width,
-                    MainLeftSection.height * 0.155F + spacing
+                    MainLeftSection.height * 0.125F + spacing
                 };
                 DrawRectangleRounded(SetupSection, 0.05F, 10, LIGHTGRAY);
 
@@ -936,7 +939,7 @@ int main()
 
                                     DrawRectangleRounded(ButtonRect, 0.2F, 10, theButton.getColorButton());
                                     std::string text = theButton.getDisplay();
-                                    DrawTextCustom(ButtonRect, text, CENTER, 0.55F, 1.0F, fontGeneral, theButton.getColorText());
+                                    DrawTextCustom(ButtonRect, text, CENTER, 0.65F, 1.0F, fontGeneral, theButton.getColorText());
 
                                 }
                             }
@@ -982,7 +985,7 @@ int main()
                             };
 
                             std::string text = parameterPID.at(i);
-                            DrawTextCustom(parameter, text, LEFT, 0.6F, 1.0F, fontGeneral, BLACK);
+                            DrawTextCustom(parameter, text, LEFT, 0.5F, 1.0F, fontGeneral, BLACK);
                         }
 
                         {
@@ -1081,6 +1084,27 @@ int main()
                                         agv.Kd = newVal;
                                         oldVal = newVal;
                                     }
+                                }
+                            }
+                            else if (parameterPID.at(i) == "Time")
+                            {
+                                float minValue = 0.05F;
+                                float maxValue = 6.0;
+
+                                static SliderInput SliderTime{ argument, agv.timeTurn, minValue, maxValue, false };
+                                SliderTime.Run();
+
+                                if (CheckCollisionPointRec(GetMousePosition(), argument))
+                                {
+                                    float newVal = (float)SliderTime.GetValue();
+                                    static float oldVal = newVal;
+
+                                    if (newVal != oldVal)
+                                    {
+                                        agv.timeTurn = newVal;
+                                        oldVal = newVal;
+                                    }
+
                                 }
                             }
                         }
@@ -1284,6 +1308,8 @@ int main()
 
                     //==============
 
+                    static float noDetection{};
+
                     //for (size_t i = 0; i < sensors.size(); i++)
                     {
                         //if (((i <= 3) && sensors.at(i).value == 1) && ((i >= 5) && sensors.at(i).value == 0))
@@ -1307,7 +1333,18 @@ int main()
                             DoneTurning = false;
                             //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
                             agvEvent = AGVEvent::FORK;
+
+                            if (CPCounter == 2)
+                            {
+                                if (MarkerCounter == 1)
+                                    noDetection = GetTime();
+                            }
+                            else if (CPCounter == 3)
+                            {
+                                noDetection = GetTime();
+                            }
                         }
+
 
                         prevForkMergeMarkerState = currentForkMergeMarkerState;
                     }
@@ -1420,15 +1457,13 @@ int main()
 
                         for (size_t i = 0; i < sensors.size(); i++)
                         {
-                            if ((i == 3) || (i == 4))
+                            if ((i == 3) || (i == 4) || (i == 2) || (i == 5))
                             {
                                 sumWeight += sensors.at(i).weight;
                                 positiveSensors++;
                             }
 
-                            static float noDetection = GetTime();
-
-                            if (GetTime() - noDetection > 1.7F)
+                            if (GetTime() - noDetection > agv.timeTurn)
                             {
                                 agvMovement = AGVMovement::NORMAL_PID;
 
@@ -1528,8 +1563,8 @@ int main()
                     resetAGVPosition();
 
                     prevCPCheckState = false;
-                    CPCounter = false;
-                    ResetCounter = false;
+                    CPCounter = 0;
+                    ResetCounter = 0;
 
                     prevForkMergeMarkerState = false;
                     MarkerCounter = false;
@@ -1713,7 +1748,7 @@ void resetAGVPosition()
     agv.velocityRight = 0;
 
     agv.x = 175;
-    agv.y = 350;
+    agv.y = 343;
 
     agv.angle = 0;
 }
