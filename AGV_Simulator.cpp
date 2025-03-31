@@ -16,7 +16,7 @@
 #include <format>
 #include "AGV_Simulator.h"
 
-const std::string AGV_TEXTURE{ "Resources/Design/AGV.png" };
+const std::string AGV_TEXTURE{ "Resources/Design/AGV2.png" };
 const std::string FONT_LOC{ "Resources/Fonts/Sofia_Sans_Condensed/static/SofiaSansCondensed-Medium.ttf" };
 const std::string MAP_A_LOC{ "Resources/Design/Track1.png" };
 const std::string MAP_B_LOC{ "Resources/Design/Track2.png" };
@@ -33,6 +33,16 @@ struct Sensor
 };
 
 std::vector<Sensor> sensors{};
+
+struct SensorMagnet
+{
+    Vector2 coor{};
+    float xPos{};
+    float weight{};
+    float coorGap{};
+    int value{};
+};
+std::vector<SensorMagnet> sensorsMagnet{};
 
 enum class SensorMODE
 {
@@ -74,6 +84,26 @@ enum class AGVConveyor
 };
 
 AGVConveyor agvConveyor = AGVConveyor::EMPTY;
+
+enum class AGVState
+{
+    NOTHING,
+    LEFT_CONFIRM,
+    RIGHT_CONFIRM,
+    CP_CONFIRM
+};
+ 
+ AGVState agvState = AGVState::NOTHING;
+// 
+// enum class DetectionState
+// {
+//      IDLE,
+//      LEFT_DETECTING,
+//      RIGHT_DETECTING,
+// }
+// 
+// DetectionState detectionState{IDLE};
+// 
 
 struct ImageSize
 {
@@ -183,7 +213,8 @@ Rectangle FlexibleRectangle(Rectangle& BaseRect, float ObjectWidth, float Object
     return flexibleRect;
 }
 
-
+int agvWidth  = 70;
+int agvHeight = 70;
 
 class AGV {
 public:
@@ -205,7 +236,7 @@ public:
         x = startX;
         y = startY;
         angle = 0.0f;
-        length = 40.0f;
+        length = agvHeight;
         velocityLeft = velocityRight = 0.0f;
     }
 
@@ -234,17 +265,17 @@ public:
 AGV agv(640, 360);
 
 void HandleInput(float dt) {
-    float const Speed = 150.0f;
+    float const Speed = 50.0f;
     float const Brake = 5.0f;
 
     if (IsKeyDown(KEY_UP)) {
         agv.velocityLeft = Speed;
         agv.velocityRight = Speed;
     }
-    //else if (IsKeyDown(KEY_DOWN)) {
-    //    agv.velocityLeft = -Speed;
-    //    agv.velocityRight = -Speed;
-    //}
+    else if (IsKeyDown(KEY_DOWN)) {
+        agv.velocityLeft = -Speed;
+        agv.velocityRight = -Speed;
+    }
     else {
         agv.velocityLeft *= 0.80f; // Natural slowdown
         agv.velocityRight *= 0.80f;
@@ -609,6 +640,17 @@ int main()
 
     agv.loadImage(AGV_TEXTURE);
 
+    //sensors.emplace_back(Sensor{ {}, { 50, 50}, -4, -40 });
+    //sensors.emplace_back(Sensor{ {}, { 55, 50}, -3, -30 });
+    //sensors.emplace_back(Sensor{ {}, { 60, 50}, -2, -20 });
+    //sensors.emplace_back(Sensor{ {}, { 63, 50}, -1, -10 });
+    //sensors.emplace_back(Sensor{ {}, { 65, 50}, +0, +0 });
+    //sensors.emplace_back(Sensor{ {}, { 63, 50}, +1, +10 });
+    //sensors.emplace_back(Sensor{ {}, { 60, 50}, +2, +20 });
+    //sensors.emplace_back(Sensor{ {}, { 55, 50}, +3, +30 });
+    //sensors.emplace_back(Sensor{ {}, { 50, 50}, +4, +40 });
+
+
     sensors.emplace_back(Sensor{ {}, { 55, 55}, -3, -35 });
     sensors.emplace_back(Sensor{ {}, { 60, 55}, -2, -25 });
     sensors.emplace_back(Sensor{ {}, { 63, 55}, -1, -15 });
@@ -618,8 +660,31 @@ int main()
     sensors.emplace_back(Sensor{ {}, { 60, 55}, +2, +25 });
     sensors.emplace_back(Sensor{ {}, { 55, 55}, +3, +35 });
 
-    int agvWidth = 90;
-    int agvHeight = 90;
+    int maxPos = 23;
+    int minPos = -maxPos;
+    int deltaPos = maxPos * 2;
+
+    size_t magSensorAccuracy = 1 << 8;
+
+    for (size_t i = 0; i < magSensorAccuracy; i++)
+    {
+        float halfCount = (magSensorAccuracy / 2);
+        float weight = (i - halfCount) / halfCount * 20;
+        //std::cout << "W : " << weight << "\n";
+
+        float stepPos = deltaPos / (float)magSensorAccuracy;
+        float pos = minPos + (i * stepPos);
+        //std::cout << "Pos " << i << " : " << pos << "\n";
+
+        sensorsMagnet.emplace_back(SensorMagnet{ {}, {30}, weight, pos, 0 });
+    }
+
+    int pad_zero = sensorsMagnet.size() >> 6;
+
+    for (size_t i = sensorsMagnet.size() / 2 - pad_zero; i < sensorsMagnet.size() / 2 + pad_zero; i++)
+    {
+        sensorsMagnet.at(i).weight = 0;
+    }
 
     fontGeneral = LoadFontEx(FONT_LOC.c_str(), 80, 0, 0);
     SetTextureFilter(fontGeneral.texture, TEXTURE_FILTER_BILINEAR);
@@ -640,6 +705,36 @@ int main()
     std::vector<std::string> parameterPID{ "SPEED", "Kp", "Ki", "Kd", "Time" };
 
     bool RUN_SIMULATION = { false };
+
+    bool currentCPCheckState{ false };
+    static bool prevCPCheckState{};
+    static int CPCounter{};
+    static int ResetCounter{};
+
+    bool currentForkMergeMarkerState{ false };
+    static bool prevForkMergeMarkerState{};
+    static int MarkerCounter{};
+
+    static bool DoneTurning{};
+    static bool DoneStraight{};
+
+    static size_t CP_COUNTER{};
+    static int STEP{};  // STEP = 1, PREPARATION, STEP = 2, CROSSING, STEP = 0 CLEAR TO NORMAL
+
+    static bool LEFT_DETECTING{};
+    static bool RIGHT_DETECTING{};
+
+    static bool PREV_FRAME_LEFT_DETECTION{};
+    static bool CURR_FRAME_LEFT_DETECTION{};
+
+    static bool PREV_FRAME_RIGHT_DETECTION{};
+    static bool CURR_FRAME_RIGHT_DETECTION{};
+
+    static AGVState prevAGVState{};
+
+    size_t LEFT_SIDE = 0;
+    size_t MIDDLE = sensorsMagnet.size() / 2;
+    size_t RIGHT_SIDE = sensorsMagnet.size();
 
     while (!WindowShouldClose())
     {
@@ -877,6 +972,8 @@ int main()
                                             flexible_panel_input = FlexibleRectangle(PanelInputImage, inputFlexibleSize.w, inputFlexibleSize.h);
 
                                             resetAGVPosition();
+
+                                            Reset(RUN_SIMULATION, prevCPCheckState, CPCounter, ResetCounter, prevForkMergeMarkerState, MarkerCounter, DoneTurning, DoneStraight);
 
                                             takeScreenShot = 2;
                                         }
@@ -1222,214 +1319,406 @@ int main()
 
                 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-                bool currentCPCheckState{ false };
-                static bool prevCPCheckState{};
-                static int CPCounter{};
-                static int ResetCounter{};
 
-                bool currentForkMergeMarkerState{ false };
-                static bool prevForkMergeMarkerState{};
-                static int MarkerCounter{};
+                ////==============
+                //if (RUN_SIMULATION)
+                //{
+                //    float Speed = agv.getSpeed();
 
-                static bool DoneTurning{};
-                static bool DoneStraight{};
+                //    int sumWeight{};
+                //    int positiveSensors{};
 
+                //    ///////
+                //    int sensorRead{};
+                //    for (auto& sensor : sensors)
+                //    {
+                //        if (sensor.value == 1)
+                //        {
+                //            sensorRead++;
+                //        }
+                //    }
+
+                //    const int CP_Confirm_Frames = 7;
+                //    static int CPFrameCounter{};
+
+                //    if (sensorRead == 8)
+                //    {
+                //        CPFrameCounter++;
+                //    }
+                //    else
+                //    {
+                //        CPFrameCounter = 0;
+                //    }
+
+                //    if (CPFrameCounter >= CP_Confirm_Frames)
+                //    {
+                //        currentCPCheckState = true;
+                //        agvEvent = AGVEvent::CHECK_POINT;
+                //    }
+                //    else
+                //    {
+                //        currentCPCheckState = false;
+                //        agvEvent = AGVEvent::NOTHING;
+                //    }
+
+
+                //    //if (sensorRead == sensors.size())
+                //    //{
+                //    //    currentCPCheckState = true;
+                //    //    agvEvent = AGVEvent::CHECK_POINT;
+                //    //}
+                //    //else
+                //    //{
+                //    //    currentCPCheckState = false;
+                //    //}
+
+                //    if (prevCPCheckState == false && currentCPCheckState == true)
+                //    {
+                //        CPCounter++;
+                //        std::cout << "CP " << CPCounter << " \n";
+
+                //        MarkerCounter = 0;
+
+                //        if (CPCounter > 3)
+                //        {
+                //            CPCounter = 1;
+                //            ResetCounter++;
+
+                //            if (ResetCounter == 2)
+                //            {
+                //                agvEvent = AGVEvent::STOP;
+                //                RUN_SIMULATION = false;
+                //                //agv.speed = 0;
+                //            }
+                //        }
+
+                //    }
+                //    prevCPCheckState = currentCPCheckState;
+
+                //    ///////
+
+                //    if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                //    {
+                //        currentForkMergeMarkerState = true;
+                //    }
+                //    else
+                //    {
+                //        currentForkMergeMarkerState = false;
+                //    }
+
+                //    if (agvEvent != AGVEvent::CHECK_POINT)
+                //    {
+
+                //        if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true))
+                //        {
+                //            MarkerCounter++;
+                //            std::cout << "Mark " << MarkerCounter << " \n";
+
+                //            agvEvent = AGVEvent::FORK;
+                //        }
+                //        else
+                //        {
+                //            //agvEvent = AGVEvent::NOTHING;
+                //        }
+                //    }
+
+                //    prevForkMergeMarkerState = currentForkMergeMarkerState;
+
+                //    ///////
+
+                //    if (agvEvent == AGVEvent::FORK)
+                //    {
+                //        if (CPCounter == 1)
+                //        {
+                //            if ((MarkerCounter == 1 || MarkerCounter == 2))
+                //            {
+                //                agvMovement = AGVMovement::RIGHT;
+                //            }
+                //        }
+                //        else if (CPCounter == 2)
+                //        {
+                //            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                //            else if (MarkerCounter == 2) agvMovement = AGVMovement::RIGHT;
+                //            else if (MarkerCounter == 3) agvMovement = AGVMovement::RIGHT;
+                //            else if (MarkerCounter == 4) agvMovement = AGVMovement::STRAIGHT;
+                //        }
+                //        else if (CPCounter == 3)
+                //        {
+                //            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                //            else
+                //                agvMovement = AGVMovement::STRAIGHT;
+                //        }
+                //    }
+
+
+                //    ///////
+
+                //    //float dx = agvCoorAtMarker.x - agvCoorNow.x;
+                //    //float dy = agvCoorAtMarker.y - agvCoorNow.y;
+
+                //    //float delta = sqrtf((dx * dx) + (dy * dy));
+
+                //    //if (delta >= 140)
+                //    //{
+                //    //    std::cout << "Delta : " << delta << "\n";
+                //    //    std::cout << "CoorNow : {" << agvCoorNow.x << "," << agvCoorNow.y << "}\n";
+
+                //    //    agvMovement = AGVMovement::NORMAL_PID;
+                //    //    agvEvent = AGVEvent::NOTHING;
+                //    //}
+
+                //    ///////
+
+                //    static double loadUnloadTimer{};
+                //    double timeNow{ GetTime() };
+
+                //    for (size_t i = 0; i < sensors.size(); i++)
+                //    {
+                //        if ((i <= 3) && sensors.at(i).value == -1)
+                //        {
+                //            if (agvConveyor == AGVConveyor::LOADED)
+                //            {
+                //                agvConveyor = AGVConveyor::UNLOADING;
+
+                //                loadUnloadTimer = GetTime();
+
+                //                agvEvent = AGVEvent::WAIT;
+                //            }
+                //        }
+                //        else if ((i >= 4) && sensors.at(i).value == -1)
+                //        {
+                //            if (agvConveyor == AGVConveyor::EMPTY)
+                //            {
+                //                agvConveyor = AGVConveyor::LOADING;
+
+                //                loadUnloadTimer = GetTime();
+
+                //                agvEvent = AGVEvent::WAIT;
+                //            }
+                //        }
+                //    }
+
+                //    if (timeNow - loadUnloadTimer > 3.0)
+                //    {
+                //        if (agvConveyor == AGVConveyor::LOADING)
+                //        {
+                //            agvConveyor = AGVConveyor::LOADED;
+                //        }
+                //        else if (agvConveyor == AGVConveyor::UNLOADING)
+                //        {
+                //            agvConveyor = AGVConveyor::EMPTY;
+                //        }
+
+                //        agvEvent = AGVEvent::NOTHING;
+
+                //        loadUnloadTimer = 0.0;
+                //    }
+
+                //    if ((agvConveyor == AGVConveyor::LOADING) || agvConveyor == AGVConveyor::UNLOADING)
+                //    {
+                //        Speed = 0;
+                //    }
+
+                //    ///////
+                //    
+                //    switch (agvMovement)
+                //    {
+                //    case AGVMovement::NORMAL_PID:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if (sensors.at(i).value == 1)
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+                //        }
+
+                //        break;
+                //    case AGVMovement::STRAIGHT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if ((i == 3) || (i == 4) || (i == 2) || (i == 5))
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+
+                //            //if (GetTime() - noDetection > agv.timeTurn)
+                //            //{
+                //            //    agvMovement = AGVMovement::NORMAL_PID;
+
+                //            //    DoneStraight = false;
+
+                //            //    agvEvent = AGVEvent::NOTHING;
+                //            //}
+                //        }
+
+                //        break;
+                //    case AGVMovement::LEFT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+
+                //        }
+
+                //        break;
+                //    case AGVMovement::RIGHT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if ((i >= 3) && sensors.at(i).value == 1)
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+
+                //            //if (sensors.at(7).value == 1)
+                //            //{
+                //            //    DoneTurning = true;
+                //            //}
+
+                //            //if (DoneTurning == true &&
+                //            //    (sensors.at(7).value == 0 && sensors.at(0).value == 0))
+                //            //{
+                //            //    agvMovement = AGVMovement::NORMAL_PID;
+
+                //            //    DoneTurning = false;
+
+                //            //    agvEvent = AGVEvent::NOTHING;
+                //            //}
+                //        }
+
+                //        break;
+
+                //    default:
+                //        break;
+                //    }
+
+                //    ///////
+                //    
+
+                //    //float error{ (float)sumWeight / positiveSensors };
+
+                //    float error = { (positiveSensors > 0) ? (float)sumWeight / positiveSensors : 0 };
+
+
+                //    // PID
+                //    float dt = GetFrameTime();
+
+                //    float Kp = agv.Kp;
+                //    float Ki = agv.Ki;
+                //    float Kd = agv.Kd;
+
+                //    float integral = error * dt;
+                //    static float prevError = 0;
+                //    float derivative = (error - prevError) / dt;
+                //    prevError = error;
+
+                //    float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+
+                //    if (positiveSensors == 0)
+                //    {
+                //        RUN_SIMULATION = false;
+                //        prevError = 0;
+                //    }
+                //    if (RUN_SIMULATION)
+                //    {
+                //        agv.velocityLeft = Speed - correction;
+                //        agv.velocityRight = Speed + correction;
+                //    }
+                //    
+                //    ///////
+                //}
+                
+                
+                
                 //==============
 
                 if (RUN_SIMULATION)
                 {
                     float Speed = agv.getSpeed();
 
-                    int sumWeight{};
-                    int positiveSensors{};
+                    float sumWeight{};
 
-                    //==============
 
+                    /////////////////////////////////////////////////////
+
+                    bool inDetection = false;
+                    size_t rangeStart = 0;
+                    size_t rangeEnd = 0;
+                    float error{};
+
+                    static bool prevSensorsLeft{};
+                    static bool currSensorsLeft{};
+                    static bool prevSensorsRight{};
+                    static bool currSensorsRight{};
+
+                    uint16_t pad_sensor = sensorsMagnet.size() >> 2;
+
+                    currSensorsLeft = 0;
+                    for (size_t i = 0; i < (sensorsMagnet.size() / 2) - pad_sensor; i++)
                     {
-                        int sensorRead{};
-                        for (auto& sensor : sensors)
+                        if (sensorsMagnet.at(i).value == 1)
                         {
-
-                            if (sensor.value == 1)
-                            {
-                                sensorRead++;
-                            }
+                            currSensorsLeft = 1;
+                            break;
                         }
-
-                        const int CP_Confirm_Frames = 7;
-                        static int CPFrameCounter{};
-
-                        if (sensorRead == 8)
-                        {
-                            CPFrameCounter++;
-                        }
-                        else
-                        {
-                            CPFrameCounter = 0;
-                        }
-
-                        if (CPFrameCounter >= CP_Confirm_Frames)
-                        {
-                            currentCPCheckState = true;
-                            agvEvent = AGVEvent::CHECK_POINT;
-                        }
-                        else
-                        {
-                            currentCPCheckState = false;
-                            agvEvent = AGVEvent::NOTHING;
-                        }
-
-                        if (prevCPCheckState == false && currentCPCheckState == true)
-                        {
-                            CPCounter++;
-                            MarkerCounter = 0;
-
-                            if (CPCounter > 3)
-                            {
-                                CPCounter = 1;
-                                ResetCounter++;
-                                //std::cout << "Reset Counter: " << ResetCounter << std::endl;
-
-                                if (ResetCounter == 2)
-                                {
-                                    agvEvent = AGVEvent::STOP;
-                                    RUN_SIMULATION = false;
-                                    //if (agvEvent == AGVEvent::STOP) std::cout << "Stop" << std::endl;
-                                }
-                            }
-                            //std::cout << "CP Counter: " << CPCounter << std::endl;
-                        }
-
-
-                        //std::cout << "CP Counter: " << CPCounter << std::endl;
                     }
 
-                    prevCPCheckState = currentCPCheckState;
-
-                    //==============
-
-                    static float noDetection{};
-
-                    //for (size_t i = 0; i < sensors.size(); i++)
+                    currSensorsRight = 0;
+                    for (size_t i = (sensorsMagnet.size() / 2) + pad_sensor; i < sensorsMagnet.size(); i++)
                     {
-                        //if (((i <= 3) && sensors.at(i).value == 1) && ((i >= 5) && sensors.at(i).value == 0))
-
-                        //if ((sensors.at(0).value == 1) && (sensors.at(7).value == 0) && (sensors.at(3).value == 1))
-                        //{
-                        //    currentForkMergeMarkerState = true;
-                        //}
-                        if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                        if (sensorsMagnet.at(i).value == 1)
                         {
-                            currentForkMergeMarkerState = true;
+                            currSensorsRight = 1;
+                            break;
                         }
-                        else
-                        {
-                            currentForkMergeMarkerState = false;
-                        }
-
-                        if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true) && (agvEvent != AGVEvent::FORK))
-                        {
-                            MarkerCounter++;
-                            DoneTurning = false;
-                            //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
-                            agvEvent = AGVEvent::FORK;
-
-                            if (CPCounter == 2)
-                            {
-                                if (MarkerCounter == 1)
-                                    noDetection = GetTime();
-                            }
-                            else if (CPCounter == 3)
-                            {
-                                noDetection = GetTime();
-                            }
-                        }
-
-
-                        prevForkMergeMarkerState = currentForkMergeMarkerState;
                     }
 
-
-                    //if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
-                    //if (agvEvent == AGVEvent::NOTHING) std::cout << "Nothing" << std::endl;
-
-                    //==============
-
-
-                    if (agvEvent == AGVEvent::FORK)
-                    {
-                        if (CPCounter == 1)
-                        {
-                            if ((MarkerCounter == 1 || MarkerCounter == 2))
-                            {
-                                agvMovement = AGVMovement::RIGHT;
-                            }
-
-                            //std::cout << "Fork & CP1 & RIGHT" << std::endl;
-                        }
-                        else if (CPCounter == 2)
-                        {
-                            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
-                            else if (MarkerCounter == 2) agvMovement = AGVMovement::RIGHT;
-                            else if (MarkerCounter == 3) agvMovement = AGVMovement::RIGHT;
-                            else if (MarkerCounter == 4) agvMovement = AGVMovement::STRAIGHT;
-                            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
-                        }
-                        else if (CPCounter == 3)
-                        {
-                            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
-                            else
-                                agvMovement = AGVMovement::STRAIGHT;
-                            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
-                        }
-                    }
 
                     //==============
 
                     static double loadUnloadTimer{};
                     double timeNow{ GetTime() };
 
-
-                    for (size_t i = 0; i < sensors.size(); i++)
+                    if (agvState == AGVState::RIGHT_CONFIRM)
                     {
-                        if ((i <= 3) && sensors.at(i).value == -1)
+                        if (agvConveyor == AGVConveyor::EMPTY)
                         {
-                            if (agvConveyor == AGVConveyor::LOADED)
-                            {
-                                agvConveyor = AGVConveyor::UNLOADING;
-
-                                loadUnloadTimer = GetTime();
-
-                                agvEvent = AGVEvent::WAIT;
-                            }
+                            agvConveyor = AGVConveyor::LOADING;
+                            loadUnloadTimer = GetTime();
                         }
-                        else if ((i >= 4) && sensors.at(i).value == -1)
+
+                        if (agvConveyor == AGVConveyor::LOADED)
                         {
-                            if (agvConveyor == AGVConveyor::EMPTY)
-                            {
-                                agvConveyor = AGVConveyor::LOADING;
-
-                                loadUnloadTimer = GetTime();
-
-                                agvEvent = AGVEvent::WAIT;
-                            }
+                            agvConveyor = AGVConveyor::UNLOADING;
+                            loadUnloadTimer = GetTime();
                         }
+
                     }
 
-                    if (timeNow - loadUnloadTimer > 3.0)
+                    //if (agvConveyor == AGVConveyor::LOADING || agvConveyor == AGVConveyor::UNLOADING)
+                    if (agvState == AGVState::RIGHT_CONFIRM)
                     {
-                        if (agvConveyor == AGVConveyor::LOADING)
+                        if (timeNow - loadUnloadTimer > 3.0)
                         {
-                            agvConveyor = AGVConveyor::LOADED;
-                        }
-                        else if (agvConveyor == AGVConveyor::UNLOADING)
-                        {
-                            agvConveyor = AGVConveyor::EMPTY;
-                        }
+                            if (agvConveyor == AGVConveyor::LOADING)
+                            {
+                                agvConveyor = AGVConveyor::LOADED;
+                            }
+                            else if (agvConveyor == AGVConveyor::UNLOADING)
+                            {
+                                agvConveyor = AGVConveyor::EMPTY;
+                            }
 
-                        agvEvent = AGVEvent::NOTHING;
+                            agvState = AGVState::NOTHING;
 
-                        loadUnloadTimer = 0.0;
+                            //std::cout << "TESTSTST\n";
+
+                            loadUnloadTimer = 0.0;
+                        }
                     }
 
                     if ((agvConveyor == AGVConveyor::LOADING) || agvConveyor == AGVConveyor::UNLOADING)
@@ -1438,88 +1727,172 @@ int main()
                     }
 
                     //==============
-                    
-                    switch (agvMovement)
+
+                    double timeSkip = 1;
+
+                    static double prevTime{};
+
+                    if (timeNow - prevTime > timeSkip)
                     {
-                    case AGVMovement::NORMAL_PID:
+                        std::cout << "STEP : " << STEP << std::endl;
+                        prevTime = timeNow;
 
-                        for (size_t i = 0; i < sensors.size(); i++)
+                        if (agvMovement == AGVMovement::NORMAL_PID)
                         {
-                            if (sensors.at(i).value == 1)
-                            {
-                                sumWeight += sensors.at(i).weight;
-                                positiveSensors++;
-                            }
+                            std::cout << "NORMAL PID\n";
+                        }
+                        else if (agvMovement == AGVMovement::RIGHT)
+                        {
+                            std::cout << "RIGHT\n";
+                        }
+                        else if (agvMovement == AGVMovement::LEFT)
+                        {
+                            std::cout << "LEFT\n";
+                        }
+                        else if (agvMovement == AGVMovement::STRAIGHT)
+                        {
+                            std::cout << "STRAIGHT\n";
                         }
 
-                        break;
-                    case AGVMovement::STRAIGHT:
+                        if (agvState == AGVState::NOTHING)
+                            std::cout << "AGV STATE : NOTHING\n";
+                        else if (agvState == AGVState::LEFT_CONFIRM)
+                            std::cout << "AGV STATE : LEFT CONFIRM\n";
+                        else if (agvState == AGVState::RIGHT_CONFIRM)
+                            std::cout << "AGV STATE : RIGHT CONFIRM\n";
+                        else if (agvState == AGVState::CP_CONFIRM)
+                            std::cout << "AGV STATE : CP CONFIRM\n";
 
-                        for (size_t i = 0; i < sensors.size(); i++)
-                        {
-                            if ((i == 3) || (i == 4) || (i == 2) || (i == 5))
-                            {
-                                sumWeight += sensors.at(i).weight;
-                                positiveSensors++;
-                            }
-
-                            if (GetTime() - noDetection > agv.timeTurn)
-                            {
-                                agvMovement = AGVMovement::NORMAL_PID;
-
-                                DoneStraight = false;
-
-                                agvEvent = AGVEvent::NOTHING;
-                            }
-                        }
-
-                        break;
-                    case AGVMovement::LEFT:
-
-                        for (size_t i = 0; i < sensors.size(); i++)
-                        {
-
-                        }
-
-                        break;
-                    case AGVMovement::RIGHT:
-
-                        for (size_t i = 0; i < sensors.size(); i++)
-                        {
-                            if ((i >= 3) && sensors.at(i).value == 1)
-                            {
-                                sumWeight += sensors.at(i).weight;
-                                positiveSensors++;
-                            }
-
-                            if (sensors.at(7).value == 1)
-                            {
-                                DoneTurning = true;
-                            }
-
-                            if (DoneTurning == true &&
-                                (sensors.at(7).value == 0 && sensors.at(0).value == 0))
-                            {
-                                agvMovement = AGVMovement::NORMAL_PID;
-
-                                DoneTurning = false;
-
-                                agvEvent = AGVEvent::NOTHING;
-                            }
-                        }
-
-                        break;
-                    default:
-                        break;
                     }
 
 
+                    //if (STEP == 1 && prevSensorsLeft == 0 && currSensorsLeft == 0)
+                    //{
+                    //    STEP = 1;
+                    //}
+                    //else if (STEP == 1 && prevSensorsLeft == 0 && currSensorsLeft == 1)
+                    //{
+                    //    STEP = 2;
+                    //}
+                    //else if (STEP == 2 && prevSensorsLeft == 1 && currSensorsLeft == 0)
+                    //{
+                    //    STEP = 3;
+                    //    agvMovement = AGVMovement::NORMAL_PID;
+                    //    agvState = AGVState::NOTHING;
+                    //}
 
-                    bool currentTurning{};
-                    static bool prevTurning{};
+                    //if (STEP == 1 && prevSensorsRight == 0 && currSensorsRight == 0)
+                    //{
+                    //    STEP = 1;
+                    //}
+                    //else if (STEP == 1 && prevSensorsRight == 0 && currSensorsRight == 1)
+                    //{
+                    //    STEP = 2;
+                    //}
+                    //else if (STEP == 2 && prevSensorsRight == 1 && currSensorsRight == 0)
+                    //{
+                    //    STEP = 3;
+                    //    agvMovement = AGVMovement::NORMAL_PID;
+                    //    agvState = AGVState::NOTHING;
+                    //}
 
-                    float error{ (float)sumWeight / positiveSensors };
 
+
+                    if (agvMovement == AGVMovement::NORMAL_PID)
+                    {
+                        for (size_t i = 0; i < sensorsMagnet.size(); i++)
+                        {
+                            if (i > 0 && i < sensorsMagnet.size() - 1)
+                            {
+
+                                if (!inDetection && sensorsMagnet.at(i - 1).value == 0 && sensorsMagnet.at(i).value == 1)
+                                {
+                                    inDetection = true;
+                                    rangeStart = i;
+                                }
+                                else if (inDetection && sensorsMagnet.at(i).value == 1 && sensorsMagnet.at(i + 1).value == 0)
+                                {
+                                    inDetection = false;
+                                    rangeEnd = i;
+
+                                    size_t point = (rangeStart + rangeEnd) / 2;
+                                    error = sensorsMagnet.at(point).weight;
+                                }
+                            }
+                        }
+                    }
+                    else if (agvMovement == AGVMovement::STRAIGHT)
+                    {
+                        for (size_t i = sensorsMagnet.size() / 2 - 20; i < sensorsMagnet.size() / 2 + 20; i++)
+                        {
+                            if (i > 0 && i < sensorsMagnet.size() - 1)
+                            {
+
+                                if (!inDetection && sensorsMagnet.at(i - 1).value == 0 && sensorsMagnet.at(i).value == 1)
+                                {
+                                    inDetection = true;
+                                    rangeStart = i;
+                                }
+                                else if (inDetection && sensorsMagnet.at(i).value == 1 && sensorsMagnet.at(i + 1).value == 0)
+                                {
+                                    inDetection = false;
+                                    rangeEnd = i;
+
+                                    size_t point = (rangeStart + rangeEnd) / 2;
+                                    error = sensorsMagnet.at(point).weight;
+                                }
+                            }
+                        }
+                    }
+                    else if (agvMovement == AGVMovement::RIGHT)
+                    {
+                        for (size_t i = sensorsMagnet.size() / 2; i < sensorsMagnet.size(); i++)
+                        {
+                            if (i > 0 && i < sensorsMagnet.size() - 1)
+                            {
+
+                                if (!inDetection && sensorsMagnet.at(i - 1).value == 0 && sensorsMagnet.at(i).value == 1)
+                                {
+                                    inDetection = true;
+                                    rangeStart = i;
+                                }
+                                else if (inDetection && sensorsMagnet.at(i).value == 1 && sensorsMagnet.at(i + 1).value == 0)
+                                {
+                                    inDetection = false;
+                                    rangeEnd = i;
+
+                                    size_t point = (rangeStart + rangeEnd) / 2;
+                                    error = sensorsMagnet.at(point).weight;
+                                }
+                            }
+                        }
+                    }                   
+                    else if (agvMovement == AGVMovement::LEFT)
+                    {
+                        for (size_t i = 0; i < sensorsMagnet.size() / 2; i++)
+                        {
+                            if (i > 0 && i < sensorsMagnet.size() - 1)
+                            {
+
+                                if (!inDetection && sensorsMagnet.at(i - 1).value == 0 && sensorsMagnet.at(i).value == 1)
+                                {
+                                    inDetection = true;
+                                    rangeStart = i;
+                                }
+                                else if (inDetection && sensorsMagnet.at(i).value == 1 && sensorsMagnet.at(i + 1).value == 0)
+                                {
+                                    inDetection = false;
+                                    rangeEnd = i;
+
+                                    size_t point = (rangeStart + rangeEnd) / 2;
+                                    error = sensorsMagnet.at(point).weight;
+                                }
+                            }
+                        }
+                    }
+
+                    prevSensorsLeft = currSensorsLeft;
+                    prevSensorsRight = currSensorsRight;
 
                     // PID
                     float dt = GetFrameTime();
@@ -1535,55 +1908,388 @@ int main()
 
                     float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
 
-                    if (positiveSensors == 0)
-                    {
-                        RUN_SIMULATION = false;
-                        prevError = 0;
-                    }
+                    //if (positiveSensors == 0)
+                    //{
+                    //    RUN_SIMULATION = false;
+                    //    prevError = 0;
+                    //}
                     if (RUN_SIMULATION)
                     {
                         agv.velocityLeft = Speed - correction;
                         agv.velocityRight = Speed + correction;
                     }
-
-
                 }
+
+                //==============
+
+                //if (RUN_SIMULATION)
+                //{
+                //    float Speed = agv.getSpeed();
+
+                //    int sumWeight{};
+                //    int positiveSensors{};
+
+                //    //==============
+
+                //    {
+                //        int sensorRead{};
+                //        for (auto& sensor : sensors)
+                //        {
+
+                //            if (sensor.value == 1)
+                //            {
+                //                sensorRead++;
+                //            }
+                //        }
+
+                //        const int CP_Confirm_Frames = 7;
+                //        static int CPFrameCounter{};
+
+                //        if (sensorRead == sensors.size())
+                //        {
+                //            CPFrameCounter++;
+                //        }
+                //        else
+                //        {
+                //            CPFrameCounter = 0;
+                //        }
+
+                //        if (CPFrameCounter >= CP_Confirm_Frames)
+                //        {
+                //            currentCPCheckState = true;
+                //            agvEvent = AGVEvent::CHECK_POINT;
+                //        }
+                //        else
+                //        {
+                //            currentCPCheckState = false;
+                //            agvEvent = AGVEvent::NOTHING;
+                //        }
+
+                //        if (prevCPCheckState == false && currentCPCheckState == true)
+                //        {
+                //            CPCounter++;
+                //            std::cout << "CP " << CPCounter << " \n";
+                //            MarkerCounter = 0;
+
+                //            if (CPCounter > 3)
+                //            {
+                //                CPCounter = 1;
+                //                ResetCounter++;
+                //                //std::cout << "Reset Counter: " << ResetCounter << std::endl;
+
+                //                if (ResetCounter == 2)
+                //                {
+                //                    agvEvent = AGVEvent::STOP;
+                //                    RUN_SIMULATION = false;
+                //                    //if (agvEvent == AGVEvent::STOP) std::cout << "Stop" << std::endl;
+                //                }
+                //            }
+                //            //std::cout << "CP Counter: " << CPCounter << std::endl;
+                //        }
+
+
+                //        //std::cout << "CP Counter: " << CPCounter << std::endl;
+                //    }
+
+                //    prevCPCheckState = currentCPCheckState;
+
+                //    //==============
+
+                //    static float noDetection{};
+
+                //    static Vector2 agvCoorAtMarker{};
+                //    Vector2 agvCoorNow{ float(int(agv.x)), float(int(agv.y)) };
+
+                //    //for (size_t i = 0; i < sensors.size(); i++)
+                //    {
+                //        if ((sensors.at(7).value == 0) && (sensors.at(3).value == 1 || sensors.at(4).value == 1) && (sensors.at(0).value == 1))
+                //        {
+                //            currentForkMergeMarkerState = true;
+                //        }
+                //        else
+                //        {
+                //            currentForkMergeMarkerState = false;
+                //        }
+
+                //        if ((prevForkMergeMarkerState == false) && (currentForkMergeMarkerState == true) && (agvEvent == AGVEvent::NOTHING))
+                //        {
+                //            MarkerCounter++;
+                //            std::cout << "Mark " << MarkerCounter << " \n";
+                //            DoneTurning = false;
+                //            //std::cout << "Marker Counter: " << MarkerCounter << std::endl;
+                //            agvEvent = AGVEvent::FORK;
+
+                //            if (CPCounter == 2)
+                //            {
+                //                if (MarkerCounter == 1)
+                //                    noDetection = GetTime();
+                //            }
+                //            else if (CPCounter == 3)
+                //            {
+                //                noDetection = GetTime();
+                //            }
+
+                //            agvCoorAtMarker.x = float(int(agvCoorNow.x));
+                //            agvCoorAtMarker.y = float(int(agvCoorNow.y));
+
+                //            std::cout << "Coor : {" << agvCoorNow.x << "," << agvCoorNow.y << "}\n";
+                //            //std::cout << "Updated CoorAtMarker: {" << agvCoorAtMarker.x << "," << agvCoorAtMarker.y << "}\n";
+
+
+                //        }
+
+
+                //        prevForkMergeMarkerState = currentForkMergeMarkerState;
+                //    }
+
+
+                //    //if (agvEvent == AGVEvent::FORK) std::cout << "Fork" << std::endl;
+                //    //if (agvEvent == AGVEvent::NOTHING) std::cout << "Nothing" << std::endl;
+
+                //    //==============
+
+
+                //    if (agvEvent == AGVEvent::FORK)
+                //    {
+                //        //float dx = agvCoorAtMarker.x - agvCoorNow.x;
+                //        //float dy = agvCoorAtMarker.y - agvCoorNow.y;
+
+                //        //float delta = sqrtf((dx * dx) + (dy * dy));
+
+                //        //if (delta >= 140)
+                //        //{
+                //        //    std::cout << "Delta : " << delta << "\n";
+                //        //    std::cout << "CoorNow : {" << agvCoorNow.x << "," << agvCoorNow.y << "}\n";
+
+                //        //    agvMovement = AGVMovement::NORMAL_PID;
+                //        //    agvEvent = AGVEvent::NOTHING;
+                //        //}
+
+                //        if (CPCounter == 1)
+                //        {
+                //            if ((MarkerCounter == 1 || MarkerCounter == 2))
+                //            {
+                //                agvMovement = AGVMovement::RIGHT;
+                //            }
+
+                //            //std::cout << "Fork & CP1 & RIGHT" << std::endl;
+                //        }
+                //        else if (CPCounter == 2)
+                //        {
+                //            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                //            else if (MarkerCounter == 2) agvMovement = AGVMovement::RIGHT;
+                //            else if (MarkerCounter == 3) agvMovement = AGVMovement::RIGHT;
+                //            else if (MarkerCounter == 4) agvMovement = AGVMovement::STRAIGHT;
+                //            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
+                //        }
+                //        else if (CPCounter == 3)
+                //        {
+                //            if (MarkerCounter == 1) agvMovement = AGVMovement::STRAIGHT;
+                //            else
+                //                agvMovement = AGVMovement::STRAIGHT;
+                //            //std::cout << "Fork & CP2 & STRAIGHT" << std::endl;
+                //        }
+                //    }
+
+
+                //    //==============
+
+                //    static double loadUnloadTimer{};
+                //    double timeNow{ GetTime() };
+
+
+                //    for (size_t i = 0; i < sensors.size(); i++)
+                //    {
+                //        if ((i <= 3) && sensors.at(i).value == -1)
+                //        {
+                //            if (agvConveyor == AGVConveyor::LOADED)
+                //            {
+                //                agvConveyor = AGVConveyor::UNLOADING;
+
+                //                loadUnloadTimer = GetTime();
+
+                //                agvEvent = AGVEvent::WAIT;
+                //            }
+                //        }
+                //        else if ((i >= 4) && sensors.at(i).value == -1)
+                //        {
+                //            if (agvConveyor == AGVConveyor::EMPTY)
+                //            {
+                //                agvConveyor = AGVConveyor::LOADING;
+
+                //                loadUnloadTimer = GetTime();
+
+                //                agvEvent = AGVEvent::WAIT;
+                //            }
+                //        }
+                //    }
+
+                //    if (timeNow - loadUnloadTimer > 3.0)
+                //    {
+                //        if (agvConveyor == AGVConveyor::LOADING)
+                //        {
+                //            agvConveyor = AGVConveyor::LOADED;
+                //        }
+                //        else if (agvConveyor == AGVConveyor::UNLOADING)
+                //        {
+                //            agvConveyor = AGVConveyor::EMPTY;
+                //        }
+
+                //        agvEvent = AGVEvent::NOTHING;
+
+                //        loadUnloadTimer = 0.0;
+                //    }
+
+                //    if ((agvConveyor == AGVConveyor::LOADING) || agvConveyor == AGVConveyor::UNLOADING)
+                //    {
+                //        Speed = 0;
+                //    }
+
+                //    //==============
+                //    
+                //    switch (agvMovement)
+                //    {
+                //    case AGVMovement::NORMAL_PID:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if (sensors.at(i).value == 1)
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+                //        }
+
+                //        break;
+                //    case AGVMovement::STRAIGHT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if ((i == 3) || (i == 4) || (i == 2) || (i == 5))
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+
+                //            if (GetTime() - noDetection > agv.timeTurn)
+                //            {
+                //                agvMovement = AGVMovement::NORMAL_PID;
+
+                //                DoneStraight = false;
+
+                //                agvEvent = AGVEvent::NOTHING;
+                //            }
+                //        }
+
+                //        break;
+                //    case AGVMovement::LEFT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+
+                //        }
+
+                //        break;
+                //    case AGVMovement::RIGHT:
+
+                //        for (size_t i = 0; i < sensors.size(); i++)
+                //        {
+                //            if ((i >= 3) && sensors.at(i).value == 1)
+                //            {
+                //                sumWeight += sensors.at(i).weight;
+                //                positiveSensors++;
+                //            }
+
+                //            if (sensors.at(7).value == 1)
+                //            {
+                //                DoneTurning = true;
+                //            }
+
+                //            if (DoneTurning == true &&
+                //                (sensors.at(7).value == 0 && sensors.at(0).value == 0))
+                //            {
+                //                agvMovement = AGVMovement::NORMAL_PID;
+
+                //                DoneTurning = false;
+
+                //                agvEvent = AGVEvent::NOTHING;
+                //            }
+                //        }
+
+                //        break;
+
+                //    default:
+                //        break;
+                //    }
+
+
+
+                //    bool currentTurning{};
+                //    static bool prevTurning{};
+
+                //    float error{ (float)sumWeight / positiveSensors };
+
+
+                //    // PID
+                //    float dt = GetFrameTime();
+
+                //    float Kp = agv.Kp;
+                //    float Ki = agv.Ki;
+                //    float Kd = agv.Kd;
+
+                //    float integral = error * dt;
+                //    static float prevError = 0;
+                //    float derivative = (error - prevError) / dt;
+                //    prevError = error;
+
+                //    float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+
+                //    if (positiveSensors == 0)
+                //    {
+                //        RUN_SIMULATION = false;
+                //        prevError = 0;
+                //    }
+                //    if (RUN_SIMULATION)
+                //    {
+                //        agv.velocityLeft = Speed - correction;
+                //        agv.velocityRight = Speed + correction;
+                //    }
+
+
+                //}
                 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
                 if (IsKeyPressed(KEY_R))
                 {
-                    agvEvent = AGVEvent::NOTHING;
-
-                    agvMovement = AGVMovement::NORMAL_PID;
-
-                    agvConveyor = AGVConveyor::EMPTY;
-
-                    RUN_SIMULATION = false;
-
-                    resetAGVPosition();
-
-                    prevCPCheckState = false;
-                    CPCounter = 0;
-                    ResetCounter = 0;
-
-                    prevForkMergeMarkerState = false;
-                    MarkerCounter = false;
-
-                    DoneTurning = false;
-                    DoneStraight = false;
+                    Reset(RUN_SIMULATION, prevCPCheckState, CPCounter, ResetCounter, prevForkMergeMarkerState, MarkerCounter, DoneTurning, DoneStraight);
                 }
 
             }
         }
 
-
-
-        Rectangle agvRect = { agv.x, agv.y, agvWidth, agvHeight };
+        Rectangle agvRect = { (int)agv.x, (int)agv.y, agvWidth, agvHeight };
         Vector2 agvOrigin = { agvWidth / 2,agvHeight / 2 };
 
         GrabAndRotate(agvWidth, agvHeight);
 
-        DrawTexturePro(agv.texture, { 0,0,378,378 }, agvRect, agvOrigin, agv.angle, WHITE);
+        DrawTexturePro(agv.texture, { 0,0,400,400 }, agvRect, agvOrigin, agv.angle, WHITE);
+
+        float magSensorDistance = 32;
+        float padSensor = 23;
+        float sensorWidth = 11;
+        Rectangle magSensor = {
+            agvRect.x + (cos((agv.angle + 0) * DEG2RAD)) * magSensorDistance,
+            agvRect.y + (sin((agv.angle + 0) * DEG2RAD)) * magSensorDistance,
+            sensorWidth,
+            agvRect.height - padSensor
+        };
+
+        Vector2 magSensorOrigin = {
+            (magSensor.width / 2) + (cos(agv.angle * DEG2RAD)),
+            (magSensor.height / 2) + (sin(agv.angle * DEG2RAD))
+        };
+        DrawRectanglePro(magSensor, magSensorOrigin, agv.angle, { 20,20,20,50 });
+
 
         {
             //Vector2 front{};
@@ -1595,88 +2301,73 @@ int main()
         }
 
         {
-            Vector2 front{};
+            Vector2 Load{};
             float value = 0;
-            front.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * value);
-            front.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * value);
+            Load.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * value);
+            Load.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * value);
 
             if (agvConveyor == AGVConveyor::LOADED || agvConveyor == AGVConveyor::UNLOADING)
             {
-                DrawCircleV(front, 15, BACKGROUND);
-                DrawCircleLinesV(front, 16, WHITE);
+                DrawCircleV(Load, 15, BACKGROUND);
+                DrawCircleLinesV(Load, 16, WHITE);
             }
         }
 
+        //std::vector<Vector2> centerPoints{};
+        //centerPoints.reserve(4);
 
-        for (Sensor& sensor : sensors)
+        //std::vector<std::pair<size_t, size_t>> detectionRanges{};
+        bool inDetection = false;
+        size_t rangeStart = 0;
+        size_t rangeEnd = 0;
+
+        for (size_t i = 0; i < sensorsMagnet.size(); ++i)
         {
+            auto sensorMag = &sensorsMagnet.at(i);
+
             Vector2 sensorArea{};
-            float valueSensorArea = 60;
+            float sensorPos = sensorMag->xPos;
 
-            if (sensorMode == SensorMODE::MODE_NORMAL)
-            {
-                valueSensorArea = sensor.positionsMode.y;
-            }
-            else
-            {
-                valueSensorArea = sensor.positionsMode.x;
-            }
+            sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * sensorPos);
+            sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * sensorPos);
 
+            float sensorYPos = sensorMag->coorGap;
+            sensorMag->coor.x = (sensorArea.x) + (cos((agv.angle + 90) * DEG2RAD) * sensorYPos);
+            sensorMag->coor.y = (sensorArea.y) + (sin((agv.angle + 90) * DEG2RAD) * sensorYPos);
 
-            sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
-            sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
-
-            float sensorOffset = sensor.coorGap;
-            sensor.coor.x = (sensorArea.x) + (cos((agv.angle + 90) * DEG2RAD) * sensorOffset);
-            sensor.coor.y = (sensorArea.y) + (sin((agv.angle + 90) * DEG2RAD) * sensorOffset);
-
-
-            Color circleColor = BLACK;
-            DrawCircleLinesV(sensor.coor, 4, circleColor);
+            //if (i % 4 == 0) DrawPixelV(sensorMag->coor, BLACK);
 
             Color lineMagnetic = { 25,25,25,255 };
             Color RedMagnetic = { 255, 0, 0, 255 };
 
             if (screenImage.height != 0)
             {
-                bool detectedNORTH = false;
-                bool detectedSOUTH = false;
+                bool detect_N_Magnet = false;
+                bool detect_S_Magnet = false;
 
-                int numSamples = 8;
-                float radius = 3;
+                Color sensorRead = GetImageColor(screenImage, sensorMag->coor.x, sensorMag->coor.y);
 
-                for (int i = 0; i < numSamples; i++)
+                if (sensorRead.r <= lineMagnetic.r &&
+                    sensorRead.g <= lineMagnetic.g &&
+                    sensorRead.b <= lineMagnetic.b &&
+                    sensorRead.a == lineMagnetic.a)
                 {
-                    float angle = (i * 360.0f / numSamples) * DEG2RAD;
-                    int sampleX = (int)(sensor.coor.x + cos(angle) * radius);
-                    int sampleY = (int)(sensor.coor.y + sin(angle) * radius);
-
-                    if (sampleX >= 0 && sampleX < screenImage.width &&
-                        sampleY >= 0 && sampleY < screenImage.height)
-                    {
-                        Color sensorRead = GetImageColor(screenImage, sampleX, sampleY);
-
-                        if (sensorRead.r <= lineMagnetic.r &&
-                            sensorRead.g <= lineMagnetic.g &&
-                            sensorRead.b <= lineMagnetic.b &&
-                            sensorRead.a == lineMagnetic.a)
-                        {
-                            detectedNORTH = true;
-                            break;  // Stop checking if touch black
-                        }
-
-                        if (sensorRead.r == RedMagnetic.r &&
-                            sensorRead.g == RedMagnetic.g &&
-                            sensorRead.b == RedMagnetic.b &&
-                            sensorRead.a == RedMagnetic.a)
-                        {
-                            detectedSOUTH = true;
-                            break;
-                        }
-                    }
+                    detect_N_Magnet = true;
+                    //break;  // Stop checking if touch black
                 }
 
-                if (detectedNORTH)
+                if (sensorRead.r == RedMagnetic.r &&
+                    sensorRead.g == RedMagnetic.g &&
+                    sensorRead.b == RedMagnetic.b &&
+                    sensorRead.a == RedMagnetic.a)
+                {
+                    detect_S_Magnet = true;
+                    //break;
+                }
+
+                Color circleColor{};
+
+                if (detect_N_Magnet)
                 {
                     circleColor = WHITE;
 
@@ -1685,22 +2376,363 @@ int main()
                         circleColor = GREEN;
                     }
 
-                    DrawCircleV(sensor.coor, 4, circleColor);
-                    sensor.value = 1;
+                    DrawPixelV(sensorMag->coor, circleColor);
+                    sensorMag->value = 1;
                 }
-                else if (detectedSOUTH)
+                else if (detect_S_Magnet)
                 {
-                    circleColor = BLACK;
+                    circleColor = GREEN;
 
-                    DrawCircleV(sensor.coor, 4, circleColor);
-                    sensor.value = -1;
+                    DrawPixelV(sensorMag->coor, circleColor);
+                    sensorMag->value = -1;
                 }
                 else {
-                    sensor.value = 0;
+                    sensorMag->value = 0;
+                }
+
+            }
+
+        }
+
+        std::vector<Vector2> points{};
+
+        for (size_t i = 0; i < sensorsMagnet.size(); i++)
+        {
+            if (i > 0 && i < sensorsMagnet.size() - 1)
+            {
+
+                if (!inDetection && sensorsMagnet.at(i - 1).value == 0 && sensorsMagnet.at(i).value == 1)
+                {
+                    inDetection = true;
+                    rangeStart = i;
+                }
+                else if (inDetection && sensorsMagnet.at(i).value == 1 && sensorsMagnet.at(i + 1).value == 0)
+                {
+                    inDetection = false;
+                    rangeEnd = i;
+
+                    size_t point = (rangeStart + rangeEnd) / 2;
+                    DrawCircleV(sensorsMagnet.at(point).coor, 3, WHITE);
+
+                    points.emplace_back(sensorsMagnet.at(point).coor);
                 }
             }
         }
 
+        int currPoints = points.size();
+        static int prevPoints{};
+
+        //std::cout << "Points : " << currPoints << std::endl;
+
+        if (agvState == AGVState::LEFT_CONFIRM)
+        {
+            if (agvMovement != AGVMovement::NORMAL_PID)
+            {
+                if (prevPoints == 2 && currPoints == 1)
+                {
+                    agvState = AGVState::NOTHING;
+                    agvMovement = AGVMovement::NORMAL_PID;
+                    std::cout << "SWITCHING\n";
+                }
+            }
+        }
+
+        prevPoints = currPoints;
+
+        ////if (agvState != AGVState::CP_CONFIRM)
+        //if (agvState == AGVState::NOTHING)
+        //{
+        //    for (size_t i = LEFT_SIDE; i < MIDDLE; i++)
+        //    {
+        //        if (sensorsMagnet.at(i).value == -1)
+        //        {
+        //            LEFT_DETECTING = true;
+        //            CURR_FRAME_LEFT_DETECTION = true;
+        //        }
+        //        else
+        //        {
+        //            CURR_FRAME_LEFT_DETECTION = false;
+        //        }
+
+        //        break;
+        //    }
+
+        //    for (size_t i = MIDDLE; i < RIGHT_SIDE; i++)
+        //    {
+        //        if (sensorsMagnet.at(i).value == -1)
+        //        {
+        //            RIGHT_DETECTING = true;
+        //            CURR_FRAME_RIGHT_DETECTION = true;
+        //        }
+        //        else
+        //        {
+        //            CURR_FRAME_RIGHT_DETECTION = false;
+        //        }
+
+        //        break;
+        //    }
+        //}
+
+        for (size_t i = LEFT_SIDE; i < MIDDLE; i++)
+        {
+            if (sensorsMagnet[i].value == -1)
+            {
+                CURR_FRAME_LEFT_DETECTION = true;
+                LEFT_DETECTING = true;
+                break;
+            }
+            CURR_FRAME_LEFT_DETECTION = false;
+        }
+
+        for (size_t i = MIDDLE; i < RIGHT_SIDE; i++)
+        {
+            if (sensorsMagnet[i].value == -1)
+            {
+                CURR_FRAME_RIGHT_DETECTION = true;
+                RIGHT_DETECTING = true;
+                break;
+            }
+            CURR_FRAME_RIGHT_DETECTION = false;
+        }
+
+        if (LEFT_DETECTING && RIGHT_DETECTING)
+        {
+            if (prevAGVState == AGVState::NOTHING)
+            {
+                CP_COUNTER++;
+
+                if (CP_COUNTER > 3) CP_COUNTER = 1;
+
+                std::cout << "CP : " << CP_COUNTER << "\n";
+
+
+                agvState = AGVState::CP_CONFIRM;
+                MarkerCounter = 0;
+            }
+        }
+
+        prevAGVState = agvState;
+
+        //if (agvState != AGVState::CP_CONFIRM)
+        //{
+        //    if (CURR_FRAME_LEFT_DETECTION == 0 && PREV_FRAME_LEFT_DETECTION == 1)
+        //    {
+        //        agvState = AGVState::LEFT_CONFIRM;
+        //    }
+
+        //    if (CURR_FRAME_RIGHT_DETECTION == 0 && PREV_FRAME_RIGHT_DETECTION == 1)
+        //    {
+        //        agvState = AGVState::RIGHT_CONFIRM;
+        //    }
+        //}
+
+        // Transition on FALLING EDGE (prev = true, curr = false)
+        if (agvState != AGVState::CP_CONFIRM)
+        {
+            if (!CURR_FRAME_LEFT_DETECTION && PREV_FRAME_LEFT_DETECTION && !RIGHT_DETECTING)
+            {
+                agvState = AGVState::LEFT_CONFIRM;
+
+                MarkerCounter++;
+                std::cout << "Marker : " << MarkerCounter << "\n";
+                STEP = 1;
+
+
+                if (CP_COUNTER == 1)
+                {
+                    if (MarkerCounter == 1 || MarkerCounter == 2)
+                    {
+                        agvMovement = AGVMovement::RIGHT;
+                        std::cout << "RIGHT\n";
+                    }
+                }
+                else if (CP_COUNTER == 2)
+                {
+                    if (MarkerCounter == 1)
+                    {
+                        agvMovement = AGVMovement::STRAIGHT;
+                        std::cout << "STRAIGHT\n";
+                    }
+                    else if (MarkerCounter == 2 || MarkerCounter == 3)
+                    {
+                        agvMovement = AGVMovement::RIGHT;
+                        std::cout << "RIGHT\n";
+                    }
+                    else
+                    {
+                        agvMovement = AGVMovement::STRAIGHT;
+                        std::cout << "STRAIGHT\n";
+                    }
+                }
+                else if (CP_COUNTER == 3)
+                {
+                    agvMovement = AGVMovement::STRAIGHT;
+                    std::cout << "STRAIGHT\n";
+                }
+            }
+
+            if (!CURR_FRAME_RIGHT_DETECTION && PREV_FRAME_RIGHT_DETECTION && !LEFT_DETECTING)
+            {
+                agvState = AGVState::RIGHT_CONFIRM;
+
+                //std::cout << "ASIGN\n";
+            }
+        }
+
+        //if (CURR_FRAME_LEFT_DETECTION == 0 && CURR_FRAME_RIGHT_DETECTION == 0)
+        //{
+        //    //agvState = AGVState::NOTHING;
+        //}
+
+        //if (agvState == AGVState::NOTHING)
+        //{
+        //    if (PREV_FRAME_LEFT_DETECTION == 0 && CURR_FRAME_LEFT_DETECTION == 0)
+        //    {
+        //        LEFT_DETECTING = false;
+        //    }
+
+        //    if (PREV_FRAME_RIGHT_DETECTION == 0 && CURR_FRAME_RIGHT_DETECTION == 0)
+        //    {
+        //        RIGHT_DETECTING = false;
+        //    }
+        //}
+
+
+        //LEFT_DETECTING = CURR_FRAME_LEFT_DETECTION;
+        //RIGHT_DETECTING = CURR_FRAME_RIGHT_DETECTION;
+
+
+        if (LEFT_DETECTING == 1 && PREV_FRAME_LEFT_DETECTION == 1 && CURR_FRAME_LEFT_DETECTION == 0)
+        {
+            LEFT_DETECTING = false;
+        }
+
+        if (RIGHT_DETECTING == 1 && PREV_FRAME_RIGHT_DETECTION == 1 && CURR_FRAME_RIGHT_DETECTION == 0)
+        {
+            RIGHT_DETECTING = false;
+        }
+
+
+        // RESET AFTER OUT OF MARKER
+        if (agvState == AGVState::CP_CONFIRM)
+        {
+
+            //for (auto& sensorsMag : sensorsMagnet)
+            //{
+            //    if (sensorsMag.value == 0)
+            //    {
+            //        agvState = AGVState::NOTHING;
+            //        break;
+            //    }
+            //}
+            if (RIGHT_DETECTING == 0 && LEFT_DETECTING == 0)
+            {
+                //if (CURR_FRAME_LEFT_DETECTION == 0 && CURR_FRAME_RIGHT_DETECTION == 0)
+                {
+                    agvState = AGVState::NOTHING;
+                    std::cout << "AGV STATE : NOTHING\n";
+                }
+            }
+        }
+
+        PREV_FRAME_LEFT_DETECTION = CURR_FRAME_LEFT_DETECTION;
+        PREV_FRAME_RIGHT_DETECTION = CURR_FRAME_RIGHT_DETECTION;
+
+
+        //for (Sensor& sensor : sensors)
+        //{
+        //    Vector2 sensorArea{};
+        //    float valueSensorArea{};
+
+        //    if (sensorMode == SensorMODE::MODE_NORMAL)
+        //    {
+        //        valueSensorArea = sensor.positionsMode.y;
+        //    }
+        //    else
+        //    {
+        //        valueSensorArea = sensor.positionsMode.x;
+        //    }
+
+
+        //    sensorArea.x = (agvRect.x) + (cos(agv.angle * DEG2RAD) * valueSensorArea);
+        //    sensorArea.y = (agvRect.y) + (sin(agv.angle * DEG2RAD) * valueSensorArea);
+
+        //    float sensorOffset = sensor.coorGap;
+        //    sensor.coor.x = (sensorArea.x) + (cos((agv.angle + 90) * DEG2RAD) * sensorOffset);
+        //    sensor.coor.y = (sensorArea.y) + (sin((agv.angle + 90) * DEG2RAD) * sensorOffset);
+
+
+        //    Color circleColor = BLACK;
+        //    DrawCircleLinesV(sensor.coor, 4, circleColor);
+
+        //    Color lineMagnetic = { 25,25,25,255 };
+        //    Color RedMagnetic = { 255, 0, 0, 255 };
+
+        //    if (screenImage.height != 0)
+        //    {
+        //        bool detect_N_Magnet = false;
+        //        bool detect_S_Magnet = false;
+
+        //        int numSamples = 8;
+        //        float radius = 3;
+
+        //        for (int i = 0; i < numSamples; i++)
+        //        {
+        //            float angle = (i * 360.0f / numSamples) * DEG2RAD;
+        //            int sampleX = (int)(sensor.coor.x + cos(angle) * radius);
+        //            int sampleY = (int)(sensor.coor.y + sin(angle) * radius);
+
+        //            if (sampleX >= 0 && sampleX < screenImage.width &&
+        //                sampleY >= 0 && sampleY < screenImage.height)
+        //            {
+        //                Color sensorRead = GetImageColor(screenImage, sampleX, sampleY);
+
+        //                if (sensorRead.r <= lineMagnetic.r &&
+        //                    sensorRead.g <= lineMagnetic.g &&
+        //                    sensorRead.b <= lineMagnetic.b &&
+        //                    sensorRead.a == lineMagnetic.a)
+        //                {
+        //                    detect_N_Magnet = true;
+        //                    break;  // Stop checking if touch black
+        //                }
+
+        //                if (sensorRead.r == RedMagnetic.r &&
+        //                    sensorRead.g == RedMagnetic.g &&
+        //                    sensorRead.b == RedMagnetic.b &&
+        //                    sensorRead.a == RedMagnetic.a)
+        //                {
+        //                    detect_S_Magnet = true;
+        //                    break;
+        //                }
+        //            }
+        //        }
+
+        //        if (detect_N_Magnet)
+        //        {
+        //            circleColor = WHITE;
+
+        //            if (agvEvent == AGVEvent::CHECK_POINT)
+        //            {
+        //                circleColor = GREEN;
+        //            }
+
+        //            DrawCircleV(sensor.coor, 4, circleColor);
+        //            sensor.value = 1;
+        //        }
+        //        else if (detect_S_Magnet)
+        //        {
+        //            circleColor = BLACK;
+
+        //            DrawCircleV(sensor.coor, 4, circleColor);
+        //            sensor.value = -1;
+        //        }
+        //        else {
+        //            sensor.value = 0;
+        //        }
+        //    }
+        //}
+
+        DrawFPS(40, 40);
 
         EndDrawing();
 
@@ -1716,6 +2748,29 @@ int main()
     }
 
     return 0;
+}
+
+void Reset(bool& RUN_SIMULATION, bool& prevCPCheckState, int& CPCounter, int& ResetCounter, bool& prevForkMergeMarkerState, int& MarkerCounter, bool& DoneTurning, bool& DoneStraight)
+{
+    agvEvent = AGVEvent::NOTHING;
+
+    agvMovement = AGVMovement::NORMAL_PID;
+
+    agvConveyor = AGVConveyor::EMPTY;
+
+    RUN_SIMULATION = false;
+
+    resetAGVPosition();
+
+    prevCPCheckState = false;
+    CPCounter = 0;
+    ResetCounter = 0;
+
+    prevForkMergeMarkerState = false;
+    MarkerCounter = false;
+
+    DoneTurning = false;
+    DoneStraight = false;
 }
 
 void AGV_PID(float Speed, float correction)
